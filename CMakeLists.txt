@@ -1,37 +1,22 @@
 ﻿cmake_minimum_required(VERSION 4.1)
 project(EChat LANGUAGES C)
 
-# CORE LIBRARY
-add_library(EChatCore
-    "src/MsgEncrypt.c"
-    "include/MySocket.h"
-    "include/MsgEncrypt.h"
-)
-
-target_include_directories(EChatCore
-    PUBLIC
-        ${CMAKE_CURRENT_SOURCE_DIR}/include
-        ${CMAKE_CURRENT_SOURCE_DIR}/OpenSSL/include
-)
-
-# UTILITIES AND DYNAMIC STRUCTS LIBRARY
-add_library(Utils
-    "src/utils.c"
-    "include/utils.h"
-)
-
-target_include_directories(Utils
-    PUBLIC
-        ${CMAKE_CURRENT_SOURCE_DIR}/include
-)
-
 # LIBRARY FOR MENU INTERFACE 
 add_library(Menu
     "src/menu.c"
     "include/menu.h"
 )
-
 target_include_directories(Menu
+    PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+
+# LIBRARY FOR TERMINAL INTERFACE CONFIGURATION
+add_library(Terminal
+    "src/terminal.c"
+    "include/terminal.h"
+)
+target_include_directories(Terminal
     PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
@@ -59,9 +44,8 @@ target_include_directories(client
         ${CMAKE_CURRENT_SOURCE_DIR}/OpenSSL/include
 )
 
-target_link_libraries(client PRIVATE EChatCore)
-target_link_libraries(client PRIVATE Utils)
 target_link_libraries(client PRIVATE Menu)
+target_link_libraries(client PRIVATE Terminal)
 
 # OpenSSL
 target_link_directories(server PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/OpenSSL/lib/VC/x64/MD)
@@ -88,9 +72,8 @@ function(add_echat_test name)
             ${CMAKE_CURRENT_SOURCE_DIR}/OpenSSL/lib/VC/x64/MD
     )
 
-    target_link_libraries(${name} PRIVATE EChatCore)
-    target_link_libraries(${name} PRIVATE Utils)
     target_link_libraries(${name} PRIVATE Menu)
+    target_link_libraries(${name} PRIVATE Terminal)
 
     if (WIN32)
     target_link_libraries(${name}

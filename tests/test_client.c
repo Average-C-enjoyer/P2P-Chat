@@ -2,343 +2,303 @@
 #include "MsgEncrypt.h"
 #include "utils.h"
 #include "menu.h"
+#include "terminal.h"
 
-#define DEBUG
+//#define DEBUG
 
-// Generate sender key (Group Key)
-int generate_group_key(unsigned char *group_key_out) {
-	if (RAND_bytes(group_key_out, SENDER_KEY_LEN) != 1) {
-		fprintf(stderr, "RAND_bytes failed generating group key\n");
-		return GENERATE_KEY_FAIL;
-	}
-	return SUCCESS;
+// Extended client for TLS
+typedef struct {
+   Client base; // original struct
+   SSL *ssl;
+   SSL_CTX *ctx;
+   unsigned char in_buffer[INPUT_BUFFER_SIZE];
+   size_t in_len;
+} ClientTLS;
+
+define_array(String);
+Array_String usernames;
+// TODO: Add users amount handling for personal chats
+
+
+// ============================
+// Length-Prefixed Protocol
+// ============================
+static int send_packet(ClientTLS *c, const unsigned char *data, uint32_t len)
+{
+   if (len > MAX_MESSAGE_SIZE)
+      return -1;
+
+   uint32_t net_len = htonl(len);
+
+   if (SSL_write(c->ssl, &net_len, sizeof(net_len)) <= 0)
+      return -1;
+
+   if (SSL_write(c->ssl, data, len) <= 0)
+      return -1;
+
+   return 0;
 }
 
-// Encode and send group key to server
-int send_group_key(SOCKET sock, const unsigned char *group_key) {
-	// Base64 encode the AES key
-	char *b64 = base64_encode(group_key, SENDER_KEY_LEN);
-	if (!b64) {
-		fprintf(stderr, "base64 encode group key failed\n");
-		return BASE64_ENCODE_FAIL;
-	}
+static int process_message(unsigned char *payload, uint32_t len)
+{
+   payload[len] = '\0';
+   printf("%s\n", payload);
+   return 0;
+}
 
-	// Format packet: [GKEY][base64_key]
-	char msg[256];
-	snprintf(msg, sizeof(msg), "[GKEY][%s]", b64);
+static int handle_recv(ClientTLS *c)
+{
+   int r = SSL_read(
+      c->ssl,
+      c->in_buffer + c->in_len,
+      INPUT_BUFFER_SIZE - c->in_len
+   );
 
-	free(b64);
+   if (r <= 0)
+      return -1;
 
-	if (send(sock, msg, (int)strlen(msg), 0) <= 0) {
-		fprintf(stderr, "send group key failed\n");
-		return SEND_FAIL;
-	}
+   c->in_len += r;
 
-	return SUCCESS;
+   while (c->in_len >= 4)
+   {
+      uint32_t msg_len;
+      memcpy(&msg_len, c->in_buffer, 4);
+      msg_len = ntohl(msg_len);
+
+      if (msg_len > MAX_MESSAGE_SIZE)
+         return -1;
+
+      if (c->in_len < 4 + msg_len)
+         break;
+
+      unsigned char *payload = c->in_buffer + 4;
+
+      process_message(payload, msg_len);
+
+      memmove(
+         c->in_buffer,
+         c->in_buffer + 4 + msg_len,
+         c->in_len - 4 - msg_len
+      );
+
+      c->in_len -= (4 + msg_len);
+   }
+
+   return 0;
 }
 
 
-// Client send thread
-// client is a pointer to Client struct
-ClientSendMessage(client) {
-	my_socket_t sock = client->socket;
-	char buffer[CLIENT_BUFFER_SIZE];
+// ============================
+// SEND THREAD
+// ============================
+ClientSendMessage(clientPtr)
+{
+   ClientTLS *client = (ClientTLS *)clientPtr;
+   char buffer[MAX_MESSAGE_SIZE];
 
-	unsigned char iv[IV_LEN];
-	unsigned char tag[TAG_LEN];
+   while (1)
+   {
+      if (!fgets(buffer, sizeof(buffer), stdin))
+         break;
 
-	while (1) {
+      size_t len = strlen(buffer);
 
-		if (!fgets(buffer, sizeof(buffer), stdin))
-			break;
+      if (len && buffer[len - 1] == '\n')
+         buffer[--len] = '\0';
 
-		// Remove trailing newline
-		size_t plain_len = strlen(buffer);
-		if (plain_len > 0 && buffer[plain_len - 1] == '\n') {
-			buffer[plain_len - 1] = '\0';
-			plain_len--;
-		}
+      if (strcmp(buffer, "exit") == 0)
+         break;
 
-		// Check for exit command
-		if (strcmp(buffer, "exit") == 0) {
-			shutdown(sock, SD_SEND);
-			break;
-		}
+      if (len == 0)
+         continue;
 
-		if(client->name) {
-				char name_prefix[MAX_NAME_LEN + 3];
-				snprintf(name_prefix, sizeof(name_prefix), "[%s] ", client->name);
-				size_t name_prefix_len = strlen(name_prefix);
-				memmove(buffer + name_prefix_len, buffer, plain_len + 1);
-				memcpy(buffer, name_prefix, name_prefix_len);
-				plain_len += name_prefix_len;
-		}
+      if (send_packet(client, (unsigned char *)buffer, (uint32_t)len) < 0)
+      {
+         printf("Send failed\n");
+         break;
+      }
+   }
 
-		if (!group_key_set) {
-			printf("Cannot send: group key not received yet.\n");
-			continue;
-		}
-
-		// Make IV
-		if (RAND_bytes(iv, IV_LEN) != 1) {
-			fprintf(stderr, "RAND_bytes(iv) failed\n");
-			break;
-		}
-
-		// Encrypt message
-		int ciphertext_len =
-			aes256_gcm_encrypt(
-				(unsigned char *)buffer,
-				(int)plain_len,
-				group_key,
-				iv, tag);
-
-		if (ciphertext_len < 0) {
-			fprintf(stderr, "AES-GCM encrypt failed\n");
-			break;
-		}
-
-		char *b64_iv = base64_encode(iv, IV_LEN);
-		char *b64_tag = base64_encode(tag, TAG_LEN);
-		char *b64_ct = base64_encode((unsigned char *)buffer, ciphertext_len);
-
-		if (!b64_iv || !b64_tag || !b64_ct) {
-			fprintf(stderr, "base64 encode failed\n");
-			free(b64_iv); free(b64_tag); free(b64_ct);
-			break;
-		}
-
-		// Final message: [GMSG][iv][tag][ciphertext]
-		char final_msg[CLIENT_BUFFER_SIZE * 2];
-		snprintf(final_msg, sizeof(final_msg),
-			"[GMSG][%s][%s][%s]", b64_iv, b64_tag, b64_ct);
-
-		free(b64_iv);
-		free(b64_tag);
-		free(b64_ct);
-
-		// Send it
-		if (send(sock, final_msg, (int)strlen(final_msg), 0) == MY_SEND_ERROR) {
-			fprintf(stderr, "send() failed: %d\n", my_get_last_error());
-			break;
-		}
-	}
-
-	my_shutdown_send(sock);
-	return 0;
+   SSL_shutdown(client->ssl);
+   return R_NULL;
 }
 
-// Client receive thread
-// lpParam is a pointer to socket
-ClientRecieveMessage(lpParam) {
-	my_socket_t sock = (my_socket_t)lpParam;
-	char buf[CLIENT_BUFFER_SIZE];
-	char usernames[MAX_CLIENTS][MAX_NAME_LEN];
-	int user_count = 0;
 
-	while (1) {
+// ============================
+// RECV THREAD
+// ============================
+ClientRecieveMessage(lpParam)
+{
+   ClientTLS *client = (ClientTLS *)lpParam;
 
-		int r = recv(sock, buf, CLIENT_BUFFER_SIZE - 1, 0);
-		if (r <= 0) {
-			printf("\nServer closed connection\n");
-			return 1;
-		}
+   while (1)
+   {
+      if (handle_recv(client) < 0)
+      {
+         printf("\nConnection closed\n");
+         break;
+      }
+   }
 
-		buf[r] = '\0';
-
-		// Check for usernames message
-		if (strncmp(buf, "[USNM]", 6) == 0) {
-			parse_usernames(buf + 6, usernames, &user_count);
-			printf("Connected users: \n");
-			for (int i = 0; i < user_count; i++) {
-				printf("%s ", usernames[i]);
-			}
-			printf("\n");
-			continue;
-		}
-
-		// Check for group key
-		if (strncmp(buf, "[GKEY]", 6) == 0) {
-
-			char *p = strchr(buf + 6, '[');
-			if (!p) continue;
-
-			char *b64 = p + 1;
-			char *end = strchr(b64, ']');
-			if (!end) continue;
-
-			*end = '\0';
-
-			unsigned char *bin = NULL;
-			int bin_len = base64_decode(b64, strlen(b64), &bin);
-			if (bin_len == SENDER_KEY_LEN) {
-				memcpy(group_key, bin, SENDER_KEY_LEN);
-				group_key_set = 1;
-				printf("Group key received!\n");
-			}
-
-			free(bin);
-			continue;
-		}
-
-		// Check for group message
-		if (strncmp(buf, "[GMSG]", 6) == 0) {
-
-			char *p = buf + 6;
-
-			// [iv]
-			char *b64_iv = strchr(p, '[') + 1;
-			char *end_iv = strchr(b64_iv, ']');
-			*end_iv = 0;
-
-			// [tag]
-			char *b64_tag = strchr(end_iv + 1, '[') + 1;
-			char *end_tag = strchr(b64_tag, ']');
-			*end_tag = 0;
-
-			// [cipher]
-			char *b64_ct = strchr(end_tag + 1, '[') + 1;
-			char *end_ct = strchr(b64_ct, ']');
-			*end_ct = 0;
-
-			unsigned char *iv_bin = NULL;
-			unsigned char *tag_bin = NULL;
-			unsigned char *cipher_text_bin = NULL;
-
-			int iv_len = base64_decode(b64_iv, strlen(b64_iv), &iv_bin);
-			int tag_len = base64_decode(b64_tag, strlen(b64_tag), &tag_bin);
-			int ct_len = base64_decode(b64_ct, strlen(b64_ct), &cipher_text_bin);
-
-			if (iv_len != IV_LEN || tag_len != TAG_LEN) {
-				free(iv_bin); free(tag_bin); free(cipher_text_bin);
-				continue;
-			}
-
-			int plain_text_len = aes256_gcm_decrypt(
-				cipher_text_bin, ct_len,
-				group_key, iv_bin, tag_bin);
-
-			if (plain_text_len >= 0) {
-				cipher_text_bin[plain_text_len] = '\0';
-				printf("%s\n", cipher_text_bin);
-			}
-
-			free(iv_bin); free(tag_bin); free(cipher_text_bin);
-			continue;
-		}
-
-		// Fallback: plain message
-		printf("%s\n", buf);
-	}
-
-	return 0;
+   return R_NULL;
 }
 
+
+// ============================
+// MAIN
+// ============================
 int main()
 {
-	Client client;
-	client.socket = -1;
-	struct addrinfo *result = NULL, *ptr = NULL, hints;
-	THREAD_TYPE threads[THREAD_COUNT];
-	char ip[IP_LENGTH];
+   ClientTLS client;
+   memset(&client, 0, sizeof(client));
 
-	// ==========
-	// START MENU
-	// ==========
-	EnableVTMode();
-	Set_UTF8_Encoding();
+   struct addrinfo *result = NULL, *ptr = NULL, hints;
+   THREAD_TYPE threads[THREAD_COUNT];
+   char ip[IP_LENGTH];
 
-	MenuButtons menu_button;
+   // START MENU
+   terminal_init();
 
-	init_menu(&menu_button);
-	display_menu(&menu_button);
-	handle_menu_selection(&menu_button);
+   StartMenu menu_button;
+   init_menu(&menu_button);
+   display_menu(&menu_button);
+   handle_menu_selection(&menu_button);
 
-	clear_screen();
+   terminal_restore();
 
-	INIT_WINSOCK();
+   INIT_WINSOCK();
+   init_openssl();
 
-	memset(&hints, 0, sizeof(hints));
-	hints.ai_family = AF_INET;
-	hints.ai_socktype = SOCK_STREAM;
-	hints.ai_protocol = IPPROTO_TCP;
+   client.ctx = create_ctx();
+   if (!client.ctx)
+   {
+      printf("TLS context failed\n");
+      return 1;
+   }
 
-#ifndef DEBUG
-	printf("Enter server IP address: ");
-	fgets(ip, sizeof(ip), stdin);
+   memset(&hints, 0, sizeof(hints));
+   hints.ai_family = AF_INET;
+   hints.ai_socktype = SOCK_STREAM;
+   hints.ai_protocol = IPPROTO_TCP;
 
-	// Remove trailing newline
-	ip[strcspn(ip, "\r\n")] = '\0';
+#ifdef DEBUG
+   printf("Enter server IP address: ");
+   fgets(ip, sizeof(ip), stdin);
+   ip[strcspn(ip, "\r\n")] = '\0';
 #else
-	strcpy(ip, "127.0.0.1");
-#endif // DEBUG
+   strcpy(ip, "127.0.0.1");
+#endif
 
-	if (getaddrinfo(ip, DEFAULT_PORT, &hints, &result) != 0) {
-		perror("getaddrinfo failed");
-		WSA_CLEANUP();
-		return 1;
-	}
+   if (getaddrinfo(ip, DEFAULT_PORT, &hints, &result) != 0)
+   {
+      perror("getaddrinfo failed");
+      return 1;
+   }
 
-	for (ptr = result; ptr != NULL; ptr = ptr->ai_next) {
-		client.socket = socket(ptr->ai_family, ptr->ai_socktype, ptr->ai_protocol);
-		if (client.socket < 0) continue;
+   for (ptr = result; ptr != NULL; ptr = ptr->ai_next)
+   {
+      client.base.socket = socket(
+         ptr->ai_family,
+         ptr->ai_socktype,
+         ptr->ai_protocol
+      );
 
-		printf("Connecting...");
-		if (connect(client.socket, ptr->ai_addr, (int)ptr->ai_addrlen) == 0) break;
+      if (client.base.socket < 0)
+         continue;
 
-		my_close(client.socket);
-		client.socket = -1;
-	}
+      printf("Connecting...");
 
-	printf(" done.\n");
-	if (client.socket) printf("Connected to server %s:%s\n", ip, DEFAULT_PORT);
+      if (connect(
+         client.base.socket,
+         ptr->ai_addr,
+         (int)ptr->ai_addrlen) == 0) {
+         printf(" done.\n");
+         break;
+      }
 
-	freeaddrinfo(result);
+		printf(" failed.\n");
+      my_close(client.base.socket);
+      client.base.socket = -1;
+   }
 
-	if (client.socket < 0) {
-		printf("Unable to connect to server!\n");
-		WSA_CLEANUP();
-		return 1;
-	}
+   if (client.base.socket < 0)
+   {
+      printf("Unable to connect!\n");
+      return 1;
+   }
 
-	if (generate_group_key(group_key) != SUCCESS || send_group_key(client.socket, group_key) != SUCCESS) {
-		printf("Failed to generate/send group key\n");
-		my_close(client.socket);
-		WSA_CLEANUP();
-		return 1;
-	}
-	group_key_set = 1;
-	printf("Local group key generated and sent\n");
+   freeaddrinfo(result);
 
-	while (1) {
-		printf("Enter name (16 characters max): ");
-		if (fgets(client.name, MAX_NAME_LEN, stdin)) {
-			size_t len = strlen(client.name);
-			if (len && client.name[len - 1] == '\n') client.name[len - 1] = '\0';
+	printf("TLS Handshake...\n");
+   // =============TLS HANDSHAKE=============
+   client.ssl = SSL_new(client.ctx);
+   SSL_set_fd(client.ssl, (int)client.base.socket);
 
-			if (strchr(client.name, ' ')) {
-				printf("Invalid name: spaces are not allowed\n");
-				client.name[0] = '\0';
-				continue;
-			}
-			break;
-		}
-	}
+   if (SSL_connect(client.ssl) <= 0)
+   {
+		printf("TLS handshake failed\n");
+      ERR_print_errors_fp(stderr);
+      printf("After ERR_print_errors_fp\n");
+      return 1;
+   }
+	printf("Verifying certificate...\n");
 
-	char name_msg[MAX_NAME_LEN + CODE_LENGTH + 1];
-	snprintf(name_msg, sizeof(name_msg), "[NAME]%s", client.name);
+   if (!verify_certificate(client.ssl))
+   {
+      printf("Certificate verification failed\n");
+      return 1;
+   }
 
-	if (send(client.socket, name_msg, (int)strlen(name_msg), 0) < 0)
-		perror("send failed");
+   printf("TLS connection established\n");
 
-	THREAD_CREATE(threads[SEND_THREAD], ClientSendMessage, &client);
-	THREAD_CREATE(threads[RECV_THREAD], ClientRecieveMessage, (void *)(uintptr_t)client.socket);
+   // =============NAME INPUT=============
+   while (1)
+   {
+      printf("Enter name (16 characters max): ");
 
-	for (int i = 0; i < THREAD_COUNT; i++)
-		THREAD_JOIN(threads[i]);
+      if (fgets(client.base.name, MAX_NAME_LEN, stdin))
+      {
+         size_t len = strlen(client.base.name);
 
-	my_close(client.socket);
-	WSA_CLEANUP();
+         if (len && client.base.name[len - 1] == '\n')
+            client.base.name[len - 1] = '\0';
 
-	return 0;
+         if (strchr(client.base.name, ' '))
+         {
+            printf("Invalid name: no spaces allowed\n");
+            client.base.name[0] = '\0';
+            continue;
+         }
+         break;
+      }
+   }
+
+   // Send the client's name to the server
+   /*send_packet(
+      &client,
+      (unsigned char *)client.base.name,
+      (uint32_t)strlen(client.base.name)
+   );*/
+
+   // =============THREADS=============
+   THREAD_CREATE(threads[SEND_THREAD], ClientSendMessage, &client);
+   THREAD_CREATE(threads[RECV_THREAD], ClientRecieveMessage, &client);
+
+   for (int i = 0; i < THREAD_COUNT; i++)
+   {
+#ifdef _WIN32
+      if (threads[i] != NULL)
+         THREAD_JOIN(threads[i]);
+#else
+      THREAD_JOIN(threads[i]);
+#endif
+   }
+
+   // =============CLEANUP=============
+   SSL_free(client.ssl);
+   SSL_CTX_free(client.ctx);
+   my_close(client.base.socket);
+   WSA_CLEANUP();
+
+   return 0;
 }

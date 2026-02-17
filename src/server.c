@@ -1,170 +1,350 @@
 #include "MySocket.h"
+#include "utils.h"
+#include "MsgEncrypt.h"
 
-// Global clients array and lock
-Client clients[MAX_CLIENTS];
-int clientCount = 0;
-MUTEX_TYPE clientsLock;
+typedef enum {
+   STATE_HANDSHAKING,
+   STATE_CONNECTED
+} ClientState;
 
-// Buffer with usernames to send to clients
-// string format: "[USNM]name1 name2 name3"
-char userNames[MAX_CLIENTS * MAX_NAME_LEN + MAX_CLIENTS - 1] = "[USNM]";
+typedef struct {
+   Client base;
+   SSL *ssl;
+
+   ClientState state;
+
+   unsigned char in_buffer[INPUT_BUFFER_SIZE];
+   size_t in_len;
+
+   unsigned char out_buffer[INPUT_BUFFER_SIZE];
+   size_t out_len;
+   size_t out_sent; // bytes already sent from out_buffer
+} ClientTLS;
 
 
-// lpParam is a pointer
-ClientHandler(lpParam) {
-   my_socket_t clientSocket = (my_socket_t)(uintptr_t)lpParam;
-   char recvbuf[SERVER_BUFFER_SIZE];
-   int bytesReceived;
-   char senderName[MAX_NAME_LEN] = "Unknown";
+define_array(ClientTLS);
+Array_ClientTLS clients;
 
-   while ((bytesReceived = recv(clientSocket, recvbuf, SERVER_BUFFER_SIZE, 0)) > 0)
-   {
-      // Handling [NAME], [GKEY], [GMSG]
-      if (bytesReceived >= CODE_LENGTH && strncmp(recvbuf, "[NAME]", CODE_LENGTH) == 0) {
-         char tmp[SERVER_BUFFER_SIZE + 1];
-         int copy_len = bytesReceived < SERVER_BUFFER_SIZE ? bytesReceived : SERVER_BUFFER_SIZE - 1;
-         memcpy(tmp, recvbuf, copy_len);
-         tmp[copy_len] = '\0';
+static SSL_CTX *server_ctx = NULL;
 
-         MUTEX_LOCK(clientsLock);
-         for (int i = 0; i < clientCount; i++) {
-            if (clients[i].socket == clientSocket) {
-               strncpy(clients[i].name, tmp + CODE_LENGTH, MAX_NAME_LEN - 1);
-               clients[i].name[MAX_NAME_LEN - 1] = '\0';
-               strncpy(senderName, clients[i].name, MAX_NAME_LEN - 1);
-               senderName[MAX_NAME_LEN - 1] = '\0';
-               printf("Client set name: %s\n", clients[i].name);
-               break;
-            }
-         }
 
-         snprintf(userNames, sizeof(userNames), "%s%s%s",
-            userNames, senderName, " "
-         );
-         printf("Updated user names: %s\n", userNames);
-         MUTEX_UNLOCK(clientsLock);
+// Initializes the TLS server context, loading certificates and keys
+static int init_tls_server()
+{
+   SSL_library_init();
+   OpenSSL_add_all_algorithms();
+   SSL_load_error_strings();
 
-         printf("Sending updated usernames to clients: %s\n", userNames);
-         if (send(clientSocket, userNames, (int)strlen(userNames), 0) < 0)
-            perror("sending usernames failed");
+   server_ctx = SSL_CTX_new(TLS_server_method());
+   if (!server_ctx)
+      return TLS_BAD_CONTEXT;
 
-         continue;
-      }
+   if (SSL_CTX_use_certificate_file(server_ctx,
+      "server.crt", SSL_FILETYPE_PEM) <= 0)
+      return TLS_BAD_CERT;
 
-      // Broadcast
-      MUTEX_LOCK(clientsLock);
-      for (int i = 0; i < clientCount; i++) {
-         my_socket_t dst = clients[i].socket;
-         if (dst != clientSocket) {
-            int total_sent = 0;
-            while (total_sent < bytesReceived) {
-               int s = send(dst, recvbuf + total_sent, bytesReceived - total_sent, 0);
-               if (s < 0) break;
-               total_sent += s;
-            }
-         }
-      }
-      MUTEX_UNLOCK(clientsLock);
-   }
+   if (SSL_CTX_use_PrivateKey_file(server_ctx,
+      "server.key", SSL_FILETYPE_PEM) <= 0)
+      return TLS_BAD_KEY;
 
-   // Remove client
-   MUTEX_LOCK(clientsLock);
-   for (int i = 0; i < clientCount; i++) {
-      if (clients[i].socket == clientSocket) {
-         clients[i] = clients[clientCount - 1];
-         clientCount--;
-         break;
-      }
-   }
-   MUTEX_UNLOCK(clientsLock);
-
-   my_close(clientSocket);
-
-   return R_NULL;
+   return OK;
 }
 
 
-int main(void) {
-   my_socket_t ServerSocket = -1, ClientSocket = -1;
-   struct addrinfo *result = NULL, hints;
-   THREAD_TYPE threads[MAX_CLIENTS];
+
+static int add_client(my_socket_t sock)
+{
+   ClientTLS c;
+   memset(&c, 0, sizeof(c));
+
+   c.base.socket = sock;
+   c.state = STATE_HANDSHAKING;
+
+   c.ssl = SSL_new(server_ctx);
+   SSL_set_fd(c.ssl, (int)sock);
+
+   SET_NONBLOCK(sock);
+
+   da_append(&clients, c);
+   return OK;
+}
+
+
+
+// Removes a client, cleaning up resources
+static void remove_client(size_t i)
+{
+   ClientTLS *c = &clients.data[i];
+
+   SSL_shutdown(c->ssl);
+   SSL_free(c->ssl);
+   my_close(c->base.socket);
+
+   da_delete(&clients, i);
+   da_handle_error(&clients);
+}
+
+
+// Queues a packet to be sent to the client, adding length prefix and buffering
+static int queue_packet(ClientTLS *c,
+   const unsigned char *data,
+   uint32_t len)
+{
+   if (len > MAX_MESSAGE_SIZE)
+      return BUFFER_OVERFLOW;
+
+   if (c->out_len + 4 + len > INPUT_BUFFER_SIZE)
+      return BUFFER_OVERFLOW;
+
+   uint32_t net_len = htonl(len);
+
+   // Data is buffered as [4-byte length][payload]
+   memcpy(c->out_buffer + c->out_len, &net_len, 4);
+   memcpy(c->out_buffer + c->out_len + 4, data, len);
+
+   c->out_len += 4 + len;
+
+   return OK;
+}
+
+
+// Flushes the send buffer by writing to the SSL connection, handling partial writes
+static int flush_send(ClientTLS *c)
+{
+   while (c->out_sent < c->out_len)
+   {
+      int r = SSL_write(
+         c->ssl,
+         c->out_buffer + c->out_sent,
+         (int)(c->out_len - c->out_sent)
+      );
+
+      if (r <= 0)
+      {
+         int err = SSL_get_error(c->ssl, r);
+
+         if (err == SSL_ERROR_WANT_WRITE ||
+            err == SSL_ERROR_WANT_READ)
+            return OK;
+
+         return SSL_SEND_FAIL;
+      }
+
+      c->out_sent += r;
+   }
+
+   c->out_len = 0;
+   c->out_sent = 0;
+   return OK;
+}
+
+
+// Handles incoming data from a client, 
+// processing complete messages and broadcasting them
+static int handle_recv(ClientTLS *c)
+{
+   int r = SSL_read(
+      c->ssl,
+      c->in_buffer + c->in_len,
+      INPUT_BUFFER_SIZE - c->in_len
+   );
+
+   if (r <= 0)
+   {
+      int err = SSL_get_error(c->ssl, r);
+
+      if (err == SSL_ERROR_WANT_READ ||
+         err == SSL_ERROR_WANT_WRITE)
+         return OK;
+
+      return SSL_RECV_FAIL;
+   }
+
+   c->in_len += r;
+
+   while (c->in_len >= 4)
+   {
+      uint32_t msg_len;
+      memcpy(&msg_len, c->in_buffer, 4);
+      msg_len = ntohl(msg_len);
+
+      if (msg_len > MAX_MESSAGE_SIZE)
+         return BUFFER_OVERFLOW;
+
+      if (c->in_len < 4 + msg_len)
+         break;
+
+      unsigned char *payload =
+         c->in_buffer + 4;
+
+      // Bradcast
+      for (size_t i = 0; i < clients.size; i++)
+      {
+         ClientTLS *dst = &clients.data[i];
+         if (dst == c) continue;
+
+         queue_packet(dst, payload, msg_len);
+      }
+
+      memmove(
+         c->in_buffer,
+         c->in_buffer + 4 + msg_len,
+         c->in_len - 4 - msg_len
+      );
+
+      c->in_len -= (4 + msg_len);
+   }
+
+   return OK;
+}
+
+// ============================
+// MAIN
+// ============================
+int main()
+{
+   my_socket_t serverSocket;
+   struct addrinfo hints, *result;
 
    INIT_WINSOCK();
 
-   MUTEX_INIT(clientsLock);
+   short tls_status = init_tls_server();
+   if (tls_status < 0)
+   {
+      print_error(tls_status);
+      return 1;
+   }
+
+   da_init(&clients);
 
    memset(&hints, 0, sizeof(hints));
    hints.ai_family = AF_INET;
    hints.ai_socktype = SOCK_STREAM;
-   hints.ai_protocol = IPPROTO_TCP;
    hints.ai_flags = AI_PASSIVE;
 
-   if (getaddrinfo(NULL, DEFAULT_PORT, &hints, &result) != 0) {
-      perror("getaddrinfo failed");
-      WSA_CLEANUP();
-      return 1;
-   }
+   getaddrinfo(NULL, DEFAULT_PORT,
+      &hints, &result);
 
-   ServerSocket = socket(result->ai_family, result->ai_socktype, result->ai_protocol);
-   if (ServerSocket < 0) {
-      perror("socket failed");
-      freeaddrinfo(result);
-      WSA_CLEANUP();
-      return 1;
-   }
+   serverSocket = socket(
+      result->ai_family,
+      result->ai_socktype,
+      result->ai_protocol);
 
-   int opt = 1;
-   setsockopt(ServerSocket, SOL_SOCKET, SO_REUSEADDR, (const char *)&opt, sizeof(opt));
+   bind(serverSocket,
+      result->ai_addr,
+      (int)result->ai_addrlen);
 
-   if (bind(ServerSocket, result->ai_addr, (int)result->ai_addrlen) < 0) {
-      perror("bind failed");
-      freeaddrinfo(result);
-      my_close(ServerSocket);
-      WSA_CLEANUP();
-      return 1;
-   }
+   listen(serverSocket, SOMAXCONN);
+   SET_NONBLOCK(serverSocket);
 
    freeaddrinfo(result);
 
-   if (listen(ServerSocket, SOMAXCONN) < 0) {
-      perror("listen failed");
-      my_close(ServerSocket);
-      WSA_CLEANUP();
-      return 1;
-   }
+   printf("TLS Event Loop Server started\n");
 
-   printf("Server is listening on port %s...\n", DEFAULT_PORT);
+   while (1)
+   {
+      size_t nfds = clients.size + 1;
 
-   while (1) {
-      ClientSocket = accept(ServerSocket, NULL, NULL);
-      if (ClientSocket < 0) {
-         perror("accept failed");
+      struct pollfd *fds =
+         malloc(sizeof(struct pollfd) * nfds);
+
+      // First fd is the server socket
+      fds[0].fd = serverSocket;
+
+      // We only care about incoming connections on the server socket
+      fds[0].events = POLLIN;
+
+      for (size_t i = 0; i < clients.size; i++)
+      {
+         fds[i + 1].fd =
+            clients.data[i].base.socket;
+
+         fds[i + 1].events = POLLIN;
+
+         if (clients.data[i].out_len > 0)
+            fds[i + 1].events |= POLLOUT;
+      }
+
+      int ready = poll(fds,
+         (unsigned long)nfds, -1);
+
+      if (ready <= 0)
+      {
+         free(fds);
          continue;
       }
 
-      MUTEX_LOCK(clientsLock);
-      if (clientCount < MAX_CLIENTS) {
-         clients[clientCount].socket = ClientSocket;
-         clients[clientCount].name[0] = '\0';
+      // New client connection
+      if (fds[0].revents & POLLIN)
+      {
+         my_socket_t sock =
+            accept(serverSocket, NULL, NULL);
 
-         THREAD_CREATE(threads[clientCount], ClientHandler, (void *)(uintptr_t)ClientSocket);
-         clientCount++;
-         printf("Client connected! Total: %d\n", clientCount);
+         if (sock >= 0)
+            add_client(sock);
       }
-      else {
-         printf("Server full, closing new connection.\n");
-         my_close(ClientSocket);
+
+      // Handle client events
+      for (size_t i = 0; i < clients.size;)
+      {
+         ClientTLS *c = &clients.data[i];
+
+         if (c->state == STATE_HANDSHAKING)
+         {
+            int ret = SSL_accept(c->ssl);
+
+            if (ret == 1)
+            {
+               printf("New client connected\n");
+               c->state = STATE_CONNECTED;
+            }
+            else
+            {
+               int err = SSL_get_error(c->ssl, ret);
+
+               if (err == SSL_ERROR_WANT_READ ||
+                  err == SSL_ERROR_WANT_WRITE)
+               {
+                  // Just wait for the next poll
+                  i++;
+                  continue;
+               }
+
+               printf("TLS handshake fatal error\n");
+               ERR_print_errors_fp(stderr);
+               remove_client(i);
+               continue;
+            }
+
+            i++;
+            continue;
+         }
+
+         // Handle incoming data
+         if (fds[i + 1].revents & POLLIN)
+         {
+            if (handle_recv(c) < 0)
+            {
+               remove_client(i);
+               continue;
+            }
+         }
+
+         // Handle outgoing data
+         if (fds[i + 1].revents & POLLOUT)
+         {
+            if (flush_send(c) < 0)
+            {
+               remove_client(i);
+               continue;
+            }
+         }
+
+         i++;
       }
-      MUTEX_UNLOCK(clientsLock);
+
+      free(fds);
    }
 
-   // Cleanup (never reached normally)
-   for (int i = 0; i < clientCount; i++) {
-      THREAD_JOIN(threads[i]);
-      my_close(clients[i].socket);
-   }
-   my_close(ServerSocket);
-   WSA_CLEANUP();
-   MUTEX_DESTROY(clientsLock);
    return 0;
 }

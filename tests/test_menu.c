@@ -4,7 +4,7 @@ int main(void) {
 	EnableVTMode();
 	Set_UTF8_Encoding();
 
-	MenuButtons menu_button;
+	StartMenu menu_button;
 
 	init_menu(&menu_button);
 	display_menu(&menu_button);

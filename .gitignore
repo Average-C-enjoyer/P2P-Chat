@@ -1,3 +1,5 @@
 OpenSSL
 out
 build_project.txt
+server.crt
+server.key

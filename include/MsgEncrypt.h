@@ -1,54 +1,46 @@
 #ifndef MSG_ENCRYPTION_H
 #define MSG_ENCRYPTION_H
 
-
-#include <openssl/pem.h>
-#include <openssl/evp.h>
-#include <openssl/hmac.h>
-#include <openssl/rand.h>
-#include <openssl/bio.h>
-#include <openssl/buffer.h>
+#include <openssl/ssl.h>
+#include <openssl/err.h>
+#include <openssl/x509.h>
+#include <openssl/sha.h>
 
 
-#define SENDER_KEY_LEN 32      // AES-256
-#define SENDER_KEY_ID_LEN 4
-#define IV_LEN 12
-#define TAG_LEN 16
+int init_openssl()
+{
+   SSL_library_init();
+   SSL_load_error_strings();
+   OpenSSL_add_all_algorithms();
+   return 1;
+}
 
-extern unsigned char group_key[SENDER_KEY_LEN];
-extern int group_key_set;
+SSL_CTX *create_ctx()
+{
+   SSL_CTX *ctx = SSL_CTX_new(TLS_client_method());
+   if (!ctx) return NULL;
 
+   if (!SSL_CTX_load_verify_locations(ctx, "server.crt", NULL)) {
+      printf("Failed to load server.crt\n");
+      return NULL;
+   }
 
-typedef struct {
-   uint32_t key_id;
-   unsigned char key[SENDER_KEY_LEN];
-   uint64_t counter;
-} sender_key_t;
+   SSL_CTX_set_min_proto_version(ctx, TLS1_3_VERSION);
+   SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER, NULL);
+   SSL_CTX_set_default_verify_paths(ctx);
 
-// Base64 encode/decode. Returns allocated buffer (needs free).
-char *base64_encode(const unsigned char *input, int length);
-int base64_decode(const char *input, int length, unsigned char **out);
+   return ctx;
+}
 
-//// Generate a fresh Sender Key bundle
-int sender_key_generate(sender_key_t *out);
+int verify_certificate(SSL *ssl)
+{
+   X509 *cert = SSL_get_peer_certificate(ssl);
+   if (!cert) return 0;
 
-// Derive IV = HMAC_SHA256(sender_key, counter)[0:12]
-int derive_message_iv(const sender_key_t *sk, unsigned char iv_out[IV_LEN]);
+   long res = SSL_get_verify_result(ssl);
+   X509_free(cert);
 
-// AES-256-GCM decrypt
-int aes256_gcm_decrypt(
-   unsigned char *buf, int len,
-   const unsigned char key[SENDER_KEY_LEN],
-   const unsigned char iv[IV_LEN],
-   const unsigned char tag[TAG_LEN]
-);
-
-// AES-256-GCM encrypt
-int aes256_gcm_encrypt(
-   unsigned char *buf, int len,
-   const unsigned char key[SENDER_KEY_LEN],
-   const unsigned char iv[IV_LEN],
-   unsigned char tag[TAG_LEN]
-);
+   return res == X509_V_OK;
+}
 
 #endif // MSG_ENCRYPTION_H

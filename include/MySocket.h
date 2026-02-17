@@ -6,6 +6,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdint.h>
+
+#define MAX_MESSAGE_SIZE 4096
+#define INPUT_BUFFER_SIZE 4096
 
 #ifdef _WIN32
    #define WIN32_LEAN_AND_MEAN
@@ -65,6 +69,10 @@
    #define ClientHandler(lpParam) DWORD __stdcall ClientHandler(void *lpParam)
    #define R_NULL 0 // For returning 0 in Windows and void* in Linux
 
+	// Macros for event loop (polling)
+   #define poll WSAPoll
+   #define SET_NONBLOCK(s) { u_long mode = 1; ioctlsocket(s, FIONBIO, &mode); }
+
 #else // Linux / POSIX
    #define MUTEX_TYPE pthread_mutex_t
    #define MUTEX_INIT(m) pthread_mutex_init(&m, NULL)
@@ -78,9 +86,15 @@
 
    #define ClientHandler(lpParam) void *ClientHandler(void *lpParam)
    #define R_NULL NULL
+
+   // Macros for event loop (polling)
+   #include <poll.h>
+   #include <fcntl.h>
+   #define SET_NONBLOCK(s) fcntl(s, F_SETFL, fcntl(s, F_GETFL, 0) | O_NONBLOCK)
+
 #endif // _WIN32 Server
 
-#define DEFAULT_PORT "27015"
+#define DEFAULT_PORT "4444"
 #define SERVER_BUFFER_SIZE 4096
 #define MAX_CLIENTS 50
 #define MAX_NAME_LEN 16
@@ -122,7 +136,6 @@ typedef struct {
    #define ClientRecieveMessage(lpParam) void __stdcall *ClientRecieveMessage(void lpParam)
 #endif // _WIN32 Client
 
-#define CLIENT_BUFFER_SIZE 1024
 #define THREAD_COUNT 2
 #define SEND_THREAD 0
 #define RECV_THREAD 1
@@ -134,7 +147,25 @@ typedef struct {
 
 typedef enum {
    SUCCESS = 0,
-   GENERATE_KEY_FAIL = -1,
-   BASE64_ENCODE_FAIL = -2,
-   SEND_FAIL = -3,
-} client_state;
+	TLS_BAD_CONTEXT = -1,
+	TLS_BAD_CERT = -2,
+	TLS_BAD_KEY = -3,
+	SSL_ACCEPT_FAIL = -4,
+	SSL_SEND_FAIL = -5,
+	SSL_RECV_FAIL = -6,
+	BUFFER_OVERFLOW = -7,
+} state;
+
+inline void print_error(state err) {
+   switch (err) {
+      case SUCCESS: printf("Success\n"); break;
+      case TLS_BAD_CONTEXT: printf("TLS context initialization failed\n"); break;
+      case TLS_BAD_CERT: printf("TLS certificate loading failed\n"); break;
+      case TLS_BAD_KEY: printf("TLS private key loading failed\n"); break;
+      case SSL_ACCEPT_FAIL: printf("SSL handshake failed\n"); break;
+      case SSL_SEND_FAIL: printf("SSL send failed\n"); break;
+      case SSL_RECV_FAIL: printf("SSL receive failed\n"); break;
+      case BUFFER_OVERFLOW: printf("Buffer overflow detected\n"); break;
+      default: printf("Unknown error\n");
+   }
+}
