@@ -66,7 +66,6 @@ static SERVER_STATUS remove_client(ClientTLS *c)
 }
 
 
-// Handles the TLS handshake process, updating epoll events based on SSL requirements
 static SERVER_STATUS handle_handshake(int epoll_fd, ClientTLS *c)
 {
     int r = SSL_accept(c->ssl);
@@ -108,7 +107,6 @@ static SERVER_STATUS handle_handshake(int epoll_fd, ClientTLS *c)
     return SSL_ACCEPT_FAIL;
 }
 
-
 // Queues a packet to be sent to the client, adding length prefix and buffering
 static SERVER_STATUS queue_packet(ClientTLS *c,
     const unsigned char *data,
@@ -132,9 +130,9 @@ static SERVER_STATUS queue_packet(ClientTLS *c,
 }
 
 
-// Flushes the send buffer by writing to the SSL connection, handling partial writes
 static SERVER_STATUS flush_send(ClientTLS *c)
 {
+    printf("sending message: %s\n", c->out_buffer);
     while (c->out_sent < c->out_len)
     {
         int r = SSL_write(
@@ -171,6 +169,8 @@ static int handle_recv(ClientTLS *c, int epoll_fd)
         c->in_buffer + c->in_len,
         INPUT_BUFFER_SIZE - c->in_len
     );
+
+    printf("Received: %s\n", c->in_buffer + c->in_len);
 
     if (r <= 0)
     {
@@ -239,11 +239,13 @@ static int handle_recv(ClientTLS *c, int epoll_fd)
 // ============================
 int main()
 {
-    int serverSocket;
-    struct addrinfo hints, *result;
+    int serverSocket = -1;
+    struct addrinfo hints, *result = NULL;
 
-    if (init_tls_server() < 0)
+    if (init_tls_server() < 0) {
+        ERROR("TLS initialization failed");
         return 1;
+    }
 
     da_init(&clients);
 
@@ -252,23 +254,36 @@ int main()
     hints.ai_socktype = SOCK_STREAM;
     hints.ai_flags = AI_PASSIVE;
 
-    if (getaddrinfo(NULL, DEFAULT_PORT, &hints, &result) != 0)
+    if (getaddrinfo(NULL, DEFAULT_PORT, &hints, &result) != 0) {
+		ERROR("getaddrinfo failed");
         return 1;
+    }
 
     serverSocket = socket(
         result->ai_family,
         result->ai_socktype,
         result->ai_protocol);
 
-    if (serverSocket < 0)
+    if (serverSocket < 0) {
+        ERROR("Failed to create socket");
         return 1;
+    }
+
+    int opt = 1;
+    if (setsockopt(serverSocket, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) < 0) {
+        ERROR("setsockopt(SO_REUSEADDR) failed");
+        close(serverSocket);
+        return 1;
+    }
 
     if (bind(serverSocket, result->ai_addr, result->ai_addrlen) < 0) {
+        ERROR("Failed to bind socket");
         close(serverSocket);
 		return 1;
     }
 
     if (listen(serverSocket, SOMAXCONN) < 0) {
+		ERROR("Failed to listen on socket");
 		close(serverSocket);
         return 1;
     }
@@ -312,14 +327,14 @@ int main()
 							break; // No more clients to accept
                         }
                         else {
-                            fprintf(stderr, "Accept failed: %s\n", strerror(errno));
+                            ERROR("Accept failed");
                             break;
                         }
                     }
 
                     if (add_client(client_fd) != OK) {
                         close(client_fd);
-						fprintf(stderr, "Failed to add client\n");
+                        ERROR("Failed to add client");
                         continue;
                     }
 

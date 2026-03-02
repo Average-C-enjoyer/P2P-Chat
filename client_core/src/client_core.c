@@ -21,6 +21,7 @@ CLIENT_STATE init_TLS_and_sock(ClientTLS *client,
     hints->ai_socktype = SOCK_STREAM;
     hints->ai_protocol = IPPROTO_TCP;
 
+	printf("Connecting to %s:%s...\n", ip, DEFAULT_PORT);
     int gai = getaddrinfo(ip, DEFAULT_PORT, hints, result);
     if (gai != 0) {
         fprintf(stderr, "getaddrinfo failed: %s\n", gai_strerror(gai));

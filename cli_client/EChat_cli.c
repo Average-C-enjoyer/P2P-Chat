@@ -6,16 +6,33 @@
 
 // TODO: Add users amount handling for personal chats
 
-// ============================
+// =====================
 // MAIN
-// ============================
-int main() {
+// =====================
+int main(int argc, char *argv[]) {
+    char ip[IP_LENGTH];
+    
+    if (argc > 1 && strcmp(argv[1], "--help") == 0) {
+        printf("Usage: %s [ip]\n", argv[0]);
+        printf("A simple TLS chat client.\n");
+        printf("Options:\n");
+        printf("  --help    Show this help message and exit\n");
+        return 0;
+    }
+
+    if (argc > 1) {
+        strncpy(ip, argv[1], IP_LENGTH - 1);
+        ip[IP_LENGTH - 1] = '\0';
+    }
+    else {
+        strcpy(ip, "127.0.0.1");
+    }
+
     ClientTLS client;
     memset(&client, 0, sizeof(client));
 
     struct addrinfo *result = NULL, hints;
     THREAD threads[THREAD_COUNT];
-    char ip[IP_LENGTH];
 
     // START MENU
     terminal_init();
@@ -28,20 +45,11 @@ int main() {
 
     terminal_restore();
 
-#ifndef DEBUG
 #ifndef _WIN32
     system("stty sane");
-#endif
-    printf("Enter server IP address: ");
-    fgets(ip, sizeof(ip), stdin);
-    ip[strcspn(ip, "\r\n")] = '\0';
-#else
-#ifndef _WIN32
-    system("stty sane");
-#endif
-    strcpy(ip, "127.0.0.1");
 #endif
 
+	printf("Connecting to server at %s:%s...\n", ip, DEFAULT_PORT);
     short err = init_TLS_and_sock(&client, &hints, &result, ip);
     if (err < 0) {
         client_print_error(err);

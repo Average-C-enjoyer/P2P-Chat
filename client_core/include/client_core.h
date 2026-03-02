@@ -7,6 +7,16 @@
 #include "String.h"
 #include "TLS.h"
 
+#define DEFAULT_PORT "4433"
+
+#define MAX_MESSAGE_SIZE 4096
+
+#define THREAD_COUNT 2
+#define SEND_THREAD 0
+#define RECV_THREAD 1
+
+#define IP_LENGTH 15
+
 typedef enum {
 	OK = 0,
 	ERR_INIT_CREATE_CTX = -1,

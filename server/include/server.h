@@ -28,6 +28,8 @@
 
 #define set_nonblocking(fd) fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK)
 
+#define ERROR(msg) fprintf(stderr, "%s: %s\n", msg, strerror(errno))
+
 // Enums for error handling
 typedef enum {
     STATE_HANDSHAKING,
@@ -67,30 +69,30 @@ typedef struct {
 extern inline void print_error_server(SERVER_STATUS err) {
     switch (err) {
     case TLS_BAD_CONTEXT:
-        fprintf(stderr, "TLS context initialization failed\n");
+        ERROR("TLS context initialization failed");
         break;
     case TLS_BAD_CERT:
-        fprintf(stderr, "Failed to load TLS certificate\n");
+        ERROR("Failed to load TLS certificate");
         break;
     case TLS_BAD_KEY:
-        fprintf(stderr, "Failed to load TLS private key\n");
+        ERROR("Failed to load TLS private key");
         break;
     case SSL_INIT_FAIL:
-        fprintf(stderr, "SSL initialization failed\n");
+        ERROR("SSL initialization failed");
 		break;
     case SSL_ACCEPT_FAIL:
-        fprintf(stderr, "TLS handshake failed\n");
+        ERROR("TLS handshake failed");
 		break;
     case SSL_SEND_FAIL:
-        fprintf(stderr, "SSL send failed\n");
+        ERROR("SSL send failed");
         break;
     case SSL_RECV_FAIL:
-        fprintf(stderr, "SSL receive failed\n");
+        ERROR("SSL receive failed");
         break;
     case BUFFER_OVERFLOW:
-        fprintf(stderr, "Buffer overflow: message too large\n");
+        ERROR("Buffer overflow: message too large");
         break;
     default:
-        fprintf(stderr, "Unknown error\n");
+        ERROR("Unknown error");
     }
 }
