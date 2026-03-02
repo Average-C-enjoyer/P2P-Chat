@@ -1,13 +1,12 @@
-#ifndef MSG_ENCRYPTION_H
-#define MSG_ENCRYPTION_H
+#pragma once
 
+#include <stdio.h>
 #include <openssl/ssl.h>
 #include <openssl/err.h>
 #include <openssl/x509.h>
 #include <openssl/sha.h>
 
-
-int init_openssl()
+static inline int init_openssl()
 {
    SSL_library_init();
    SSL_load_error_strings();
@@ -15,7 +14,7 @@ int init_openssl()
    return 1;
 }
 
-SSL_CTX *create_ctx()
+static inline SSL_CTX *create_ctx()
 {
    SSL_CTX *ctx = SSL_CTX_new(TLS_client_method());
    if (!ctx) return NULL;
@@ -32,15 +31,13 @@ SSL_CTX *create_ctx()
    return ctx;
 }
 
-int verify_certificate(SSL *ssl)
+static inline int verify_certificate(SSL *ssl)
 {
-   X509 *cert = SSL_get_peer_certificate(ssl);
-   if (!cert) return 0;
+    X509 *cert = SSL_get_peer_certificate(ssl);
+    if (!cert) return 0;
 
-   long res = SSL_get_verify_result(ssl);
-   X509_free(cert);
+    long res = SSL_get_verify_result(ssl);
+    X509_free(cert);
 
-   return res == X509_V_OK;
+    return res == X509_V_OK;
 }
-
-#endif // MSG_ENCRYPTION_H

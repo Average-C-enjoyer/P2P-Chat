@@ -1,102 +1,131 @@
-﻿cmake_minimum_required(VERSION 4.1)
+﻿cmake_minimum_required(VERSION 3.20)
+
 project(EChat LANGUAGES C)
 
-# LIBRARY FOR MENU INTERFACE 
-add_library(Menu
-    "src/menu.c"
-    "include/menu.h"
+set(CMAKE_C_STANDARD 11)
+set(CMAKE_C_STANDARD_REQUIRED ON)
+
+# ===============================
+# Dependencies
+# ===============================
+
+find_package(OpenSSL REQUIRED)
+
+# ===============================
+# Libraries
+# ===============================
+
+# MENU
+add_library(CliMenu
+    "cli_client/src/menu.c"
+    "cli_client/src/terminal.c"
+    "cli_client/include/menu.h"
+    "cli_client/include/terminal.h"
 )
-target_include_directories(Menu
+
+target_include_directories(CliMenu
     PUBLIC
-        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/cli_client/include
 )
 
-# LIBRARY FOR TERMINAL INTERFACE CONFIGURATION
-add_library(Terminal
-    "src/terminal.c"
-    "include/terminal.h"
+# CLIENT CORE
+add_library(ClientCore
+    "client_core/src/client_core.c"
+    "client_core/include/client_core.h"
+    "client_core/include/cross_platform_api.h"
+    "client_core/include/TLS.h"
 )
-target_include_directories(Terminal
+
+target_include_directories(ClientCore
     PUBLIC
-        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/client_core/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/utils
 )
 
-# SERVER
-add_executable(server
-    "src/server.c"
-)
-
-target_include_directories(server
+target_link_libraries(ClientCore
     PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        OpenSSL::SSL
+        OpenSSL::Crypto
 )
 
-target_link_libraries(server PRIVATE EChatCore)
+# ===============================
+# SERVER (Linux only)
+# ===============================
 
-# CLIENT
-add_executable(client
-    "src/CLI_client.c"
-)
+if(UNIX AND NOT WIN32)
 
-target_include_directories(client
-    PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}/include
-        ${CMAKE_CURRENT_SOURCE_DIR}/OpenSSL/include
-)
+    add_executable(server
+        server/server.c
+    )
 
-target_link_libraries(client PRIVATE Menu)
-target_link_libraries(client PRIVATE Terminal)
+    target_include_directories(server
+        PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/server/include
+            ${CMAKE_CURRENT_SOURCE_DIR}/utils
+    )
 
-# OpenSSL
-target_link_directories(server PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/OpenSSL/lib/VC/x64/MD)
-target_link_directories(client PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/OpenSSL/lib/VC/x64/MD)
+    target_link_libraries(server
+        PRIVATE
+            OpenSSL::SSL
+            OpenSSL::Crypto
+    )
 
-if(WIN32)
-target_link_libraries(server PRIVATE ws2_32 libssl.lib libcrypto.lib)
-target_link_libraries(client PRIVATE ws2_32 libcrypto.lib)
 endif()
 
+# ===============================
+# CLIENT (Windows + Linux)
+# ===============================
 
+add_executable(EChat_cli
+    "cli_client/EChat_cli.c"
+)
+
+target_include_directories(EChat_cli
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/utils
+)
+
+target_link_libraries(EChat_cli
+    PRIVATE
+        CliMenu
+        ClientCore
+)
+
+# Windows-specific networking
+if(WIN32)
+    target_link_libraries(EChat_cli PRIVATE ws2_32)
+endif()
+
+# ===============================
 # TESTS
+# ===============================
+
+option(ENABLE_TESTS "Build test executables" ON)
+
 function(add_echat_test name)
     add_executable(${name} ${ARGN})
 
     target_include_directories(${name}
         PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}/include
-            ${CMAKE_CURRENT_SOURCE_DIR}/OpenSSL/include
     )
 
-    target_link_directories(${name}
-        PRIVATE
-            ${CMAKE_CURRENT_SOURCE_DIR}/OpenSSL/lib/VC/x64/MD
-    )
-
-    target_link_libraries(${name} PRIVATE Menu)
-    target_link_libraries(${name} PRIVATE Terminal)
-
-    if (WIN32)
     target_link_libraries(${name}
         PRIVATE
-            ws2_32
-            libcrypto.lib
-            libssl.lib
+            CliMenu
+            #OpenSSL::SSL
+            #OpenSSL::Crypto
     )
+
+    if(WIN32)
+        target_link_libraries(${name} PRIVATE ws2_32)
     endif()
 endfunction()
 
-option(ENABLE_TESTS "Build test executables" ON)
-
 if(ENABLE_TESTS)
-    add_echat_test(test_server
-        tests/test_server.c
-    )
-
-    add_echat_test(test_client
-        tests/test_client.c
-    )
 
     add_echat_test(test_menu
         tests/test_menu.c
     )
-endif() # ENABLE_TESTS
+
+endif()

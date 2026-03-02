@@ -1,8 +1,6 @@
 #include "menu.h"
 
 int main(void) {
-	EnableVTMode();
-	Set_UTF8_Encoding();
 
 	StartMenu menu_button;
 
@@ -10,7 +8,11 @@ int main(void) {
 	display_menu(&menu_button);
 	handle_menu_selection(&menu_button);
 
-	clear_screen();
+#ifdef _WIN32
+	system("cls");
+#else
+	system("clear");
+#endif
 	printf("You exited menu\n");
 
 	return 0;

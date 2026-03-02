@@ -4,7 +4,10 @@
 #include <stdio.h>
 
 #ifdef _WIN32
-#  include <windows.h>
+	#include <windows.h>
+#else
+	#include <termios.h>
+	#include <unistd.h>
 #endif
 
 typedef enum {
