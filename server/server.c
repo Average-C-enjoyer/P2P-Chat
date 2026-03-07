@@ -1,10 +1,12 @@
 #include "server.h"
-#include "darray.h"
-#include "linked_list.h"
 
-LinkedList clients;
+define_ptr_array(ClientTLS);
+
+Array_ClientTLS clients;
 
 static SSL_CTX *server_ctx = NULL;
+
+
 
 // Initializes the TLS server context, loading certificates and keys
 static SERVER_STATUS init_tls_server()
@@ -48,7 +50,11 @@ static SERVER_STATUS add_client(int sock)
 
     set_nonblocking(sock);
 
-    ll_append(&clients, c);
+    da_append(&clients, c);
+    if (da_get_last_err(&clients) != DA_OK) {
+        da_print_error(clients.err);
+        return SSL_INIT_FAIL;
+    }
     return OK;
 }
 
@@ -56,45 +62,18 @@ static SERVER_STATUS add_client(int sock)
 // Removes a client, cleaning up resources
 static SERVER_STATUS remove_client(ClientTLS *c)
 {
-    if (!c) return OK;
+	if (!c) return OK;
 
     SSL_shutdown(c->ssl);
     SSL_free(c->ssl);
     close(c->socket);
 
-    if (clients.size == 0) {
-        free(c);
-        return OK;
-    }
+	da_swap_remove_ptr(&clients, c->index);
 
-    size_t idx = c->index;
-    if (idx >= clients.size) {
-        // invalid index — fall to linear search to be safe
-        Node *current = clients.head;
-        size_t i = 0;
-        while (current != NULL) {
-            if (current->data == c) {
-                idx = i;
-                break;
-            }
-            current = current->next;
-            i++;
-        }
-    }
-
-    size_t last = clients.size - 1;
-    if (idx != last) {
-        // move last element into removed slot
-        ClientTLS *moved = (ClientTLS *)ll_get(&clients, last);
-        if (!moved) {
-            free(c);
-            return OK;
-		}
-        ll_insert(&clients, idx, (void *)moved);
-        moved->index = idx;
-    }
-
-    ll_remove(&clients, last);
+    if (da_get_last_err(&clients) != DA_OK) {
+        da_print_error(clients.err);
+        return REMOVE_CLIENT_FAIL;
+	}
     free(c);
 
     return OK;
@@ -235,7 +214,7 @@ static int handle_recv(ClientTLS *c, int epoll_fd)
         // Bradcast
         for (size_t i = 0; i < clients.size; i++)
         {
-            ClientTLS *dst = (ClientTLS *)ll_get(&clients, i);
+            ClientTLS *dst = clients.data[i];
             if (dst == c) continue;
 
             short err = queue_packet(dst, payload, msg_len);
@@ -274,12 +253,14 @@ int main()
     int serverSocket = -1;
     struct addrinfo hints, *result = NULL;
 
-    if (init_tls_server() < 0) {
+	short err = init_tls_server();
+    if (err < 0) {
         ERROR("TLS initialization failed");
+		print_error_server(err);
         return 1;
     }
 
-    ll_init(&clients);
+    da_init(&clients);
 
     memset(&hints, 0, sizeof(hints));
     hints.ai_family = AF_INET;
@@ -370,11 +351,11 @@ int main()
                         continue;
                     }
 
-                    ClientTLS *c = (ClientTLS *)ll_get(&clients, clients.size - 1);
+					ClientTLS *c = clients.data[clients.size - 1];
 
                     struct epoll_event client_ev;
                     client_ev.events = EPOLLIN | EPOLLET;
-                    client_ev.data.ptr = (ClientTLS *)c;
+                    client_ev.data.ptr = c;
 
                     epoll_ctl(epoll_fd,
                         EPOLL_CTL_ADD,

@@ -1,10 +1,5 @@
 #pragma once
 
-#define NAME 16
-
-//=============================
-// Dynamic array implementation
-//=============================
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -18,21 +13,21 @@ typedef enum {
 	DA_ERR_BAD_INDEX,
 } DARRAY_STATUS;
 
-#define define_array(type)   \
+#define define_array(T)      \
 typedef struct {             \
-	type		*data;       \
+	T		    *data;       \
 	size_t	     size;       \
 	size_t       capacity;   \
 	short        err;        \
-} Array_##type;
+} Array_##T;
 
-#define define_ptr_array(type)   \
+#define define_ptr_array(T)  \
 typedef struct {             \
-	type		**data;      \
+	T          **data;       \
 	size_t	     size;       \
 	size_t       capacity;   \
 	short        err;        \
-} Array_##type;
+} Array_##T;
 
 #define da_init(a)           \
 	do {                     \
@@ -142,6 +137,40 @@ typedef struct {             \
 	(a)->size++;                                         \
 	(a)->err = DA_OK;                                    \
 } while(0)
+
+#define da_swap_remove(a, index) do {                    \
+    if ((index) >= (a)->size) {                          \
+        (a)->err = DA_ERR_BAD_INDEX;                     \
+        break;                                           \
+    }                                                    \
+                                                         \
+    size_t last = (a)->size - 1;                         \
+                                                         \
+    if ((index) != last) {                               \
+        (a)->data[index] = (a)->data[last];              \
+    }                                                    \
+                                                         \
+    (a)->size--;                                         \
+    (a)->err = DA_OK;                                    \
+} while (0)
+
+
+#define da_swap_remove_ptr(a, idx) do {                  \
+    if ((idx) >= (a)->size) {                            \
+        (a)->err = DA_ERR_BAD_INDEX;                     \
+        break;                                           \
+    }                                                    \
+                                                         \
+    size_t last = (a)->size - 1;                         \
+                                                         \
+    if ((idx) != last) {                                 \
+        (a)->data[idx] = (a)->data[last];                \
+        (a)->data[idx]->index = idx;                     \
+    }                                                    \
+                                                         \
+    (a)->size--;                                         \
+    (a)->err = DA_OK;                                    \
+} while (0)
 
 #define da_get_last_err(a) ((a)->err)
 

@@ -7,7 +7,7 @@
 #include "String.h"
 #include "TLS.h"
 
-#define DEFAULT_PORT "4433"
+#define DEFAULT_PORT "4444"
 
 #define MAX_MESSAGE_SIZE 4096
 

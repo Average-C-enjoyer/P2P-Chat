@@ -20,7 +20,9 @@
 #include <openssl/ssl.h>
 #include <openssl/err.h>
 
-#define DEFAULT_PORT "4433"
+#include "darray.h"
+
+#define DEFAULT_PORT "4444"
 #define MAX_MESSAGE_SIZE 4096
 #define INPUT_BUFFER_SIZE 4096
 
@@ -41,11 +43,12 @@ typedef enum {
     TLS_BAD_CONTEXT = -1,
     TLS_BAD_CERT = -2,
     TLS_BAD_KEY = -3,
-	SSL_INIT_FAIL = -4,
+    SSL_INIT_FAIL = -4,
     SSL_ACCEPT_FAIL = -5,
     SSL_SEND_FAIL = -6,
     SSL_RECV_FAIL = -7,
     BUFFER_OVERFLOW = -8,
+	REMOVE_CLIENT_FAIL = -9
 } SERVER_STATUS;
 
 
@@ -64,7 +67,7 @@ typedef struct {
     size_t out_len;
     size_t out_sent; // bytes already sent from out_buffer
 
-    size_t index; // индекс в массиве clients (для O(1) удаления)
+    size_t index; // index in clients arr (for O(1) delete)
 } ClientTLS;
 
 
@@ -94,6 +97,9 @@ static inline void print_error_server(SERVER_STATUS err) {
     case BUFFER_OVERFLOW:
         ERROR("Buffer overflow: message too large");
         break;
+    case REMOVE_CLIENT_FAIL:
+        ERROR("Failed to remove client");
+		break;
     default:
         ERROR("Unknown error");
     }
