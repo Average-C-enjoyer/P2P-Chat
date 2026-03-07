@@ -105,10 +105,10 @@ static TLS_STATE send_packet(ClientTLS *c, const unsigned char *data, uint32_t l
     uint32_t net_len = htonl(len);
 
     if (SSL_write(c->ssl, &net_len, sizeof(net_len)) <= 0)
-        return SSL_SEND_FAIL;
+        return SEND_FAIL;
 
     if (SSL_write(c->ssl, data, len) <= 0)
-        return SSL_SEND_FAIL;
+        return SEND_FAIL;
 
     return TLS_OK;
 }
@@ -128,7 +128,7 @@ static TLS_STATE handle_recv(ClientTLS *c)
     );
 
     if (r <= 0)
-        return SSL_RECV_FAIL;
+        return RECV_FAIL;
 
     c->in_len += r;
 
@@ -192,6 +192,8 @@ ClientSendMessage(clientPtr)
     }
 
     SSL_shutdown(client->ssl);
+	SSL_free(client->ssl);
+	CLOSE(client->socket);
     return NULL;
 }
 

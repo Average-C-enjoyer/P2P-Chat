@@ -1,12 +1,12 @@
 #include "server.h"
 
+#define DEBUG
+
 define_ptr_array(ClientTLS);
 
 Array_ClientTLS clients;
 
 static SSL_CTX *server_ctx = NULL;
-
-
 
 // Initializes the TLS server context, loading certificates and keys
 static SERVER_STATUS init_tls_server()
@@ -35,45 +35,57 @@ static SERVER_STATUS add_client(int sock)
 {
     ClientTLS *c = malloc(sizeof(ClientTLS));
     if (!c)
-        return SSL_INIT_FAIL;
+        return CLIENT_INIT_FAIL;
     memset(c, 0, sizeof(ClientTLS));
 
     c->socket = sock;
-    c->state = STATE_HANDSHAKING;
+    c->flags.state = STATE_HANDSHAKING;
 
     c->ssl = SSL_new(server_ctx);
-    if (!c->ssl)
-        return SSL_INIT_FAIL;
+    if (!c->ssl) {
+        free(c);
+        return CLIENT_INIT_FAIL;
+    }
 
-    if (SSL_set_fd(c->ssl, (int)sock) <= 0)
-		return SSL_INIT_FAIL;
+    if (SSL_set_fd(c->ssl, (int)sock) <= 0) {
+        free(c);
+        return CLIENT_INIT_FAIL;
+    }
 
     set_nonblocking(sock);
 
     da_append(&clients, c);
     if (da_get_last_err(&clients) != DA_OK) {
+        free(c);
         da_print_error(clients.err);
-        return SSL_INIT_FAIL;
+        return CLIENT_INIT_FAIL;
     }
+    c->index = clients.size - 1;
     return OK;
 }
 
 
 // Removes a client, cleaning up resources
-static SERVER_STATUS remove_client(ClientTLS *c)
+static SERVER_STATUS remove_client(int epoll_fd, ClientTLS *c)
 {
-	if (!c) return OK;
+    if (!c) return OK;
 
-    SSL_shutdown(c->ssl);
+    // Remove from epoll to avoid receiving further events for this socket
+    if (epoll_fd >= 0) {
+        if (epoll_ctl(epoll_fd, EPOLL_CTL_DEL, c->socket, NULL) < 0) {
+            ERROR("epoll_ctl(DEL) failed");
+        }
+    }
+
     SSL_free(c->ssl);
     close(c->socket);
 
-	da_swap_remove_ptr(&clients, c->index);
+    da_swap_remove_ptr(&clients, c->index);
 
     if (da_get_last_err(&clients) != DA_OK) {
         da_print_error(clients.err);
         return REMOVE_CLIENT_FAIL;
-	}
+    }
     free(c);
 
     return OK;
@@ -86,7 +98,7 @@ static SERVER_STATUS handle_handshake(int epoll_fd, ClientTLS *c)
 
     if (r == 1)
     {
-        c->state = STATE_CONNECTED;
+        c->flags.state = STATE_CONNECTED;
 
         struct epoll_event ev;
         ev.events = EPOLLIN | EPOLLET;
@@ -118,7 +130,7 @@ static SERVER_STATUS handle_handshake(int epoll_fd, ClientTLS *c)
         return OK;
     }
 
-    return SSL_ACCEPT_FAIL;
+    return CLIENT_HANDSHAKE_FAIL;
 }
 
 // Queues a packet to be sent to the client, adding length prefix and buffering
@@ -126,10 +138,10 @@ static SERVER_STATUS queue_packet(ClientTLS *c,
     const unsigned char *data,
     uint32_t len)
 {
-    if (len > MAX_MESSAGE_SIZE)
+    if (len > INPUT_BUFFER_SIZE)
         return BUFFER_OVERFLOW;
 
-    if (c->out_len + 4 + len > INPUT_BUFFER_SIZE)
+    if (c->out_len + 4 + len > OUTPUT_BUFFER_SIZE)
         return BUFFER_OVERFLOW;
 
     uint32_t net_len = htonl(len);
@@ -162,7 +174,7 @@ static SERVER_STATUS flush_send(ClientTLS *c)
                 err == SSL_ERROR_WANT_READ)
                 return OK;
 
-            return SSL_SEND_FAIL;
+            return SEND_FAIL;
         }
 
         c->out_sent += r;
@@ -177,24 +189,58 @@ static SERVER_STATUS flush_send(ClientTLS *c)
 // processing complete messages and broadcasting them
 static int handle_recv(ClientTLS *c, int epoll_fd)
 {
-    int r = SSL_read(
-        c->ssl,
-        c->in_buffer + c->in_len,
-        INPUT_BUFFER_SIZE - c->in_len
-    );
+    int need_epoll_out = 0;
 
-    if (r <= 0)
+    while (1)
     {
+        size_t avail = INPUT_BUFFER_SIZE - c->in_len;
+        if (avail == 0) {
+            // no space to read more
+            return BUFFER_OVERFLOW;
+        }
+
+        int r = SSL_read(
+            c->ssl,
+            c->in_buffer + c->in_len,
+            (int)avail
+        );
+
+        if (r > 0)
+        {
+            c->in_len += r;
+            // try to read more until WANT_READ or buffer full
+            if (c->in_len == INPUT_BUFFER_SIZE) {
+                break;
+            }
+            else {
+                continue;
+            }
+        }
+
+        // r <= 0
         int err = SSL_get_error(c->ssl, r);
 
-        if (err == SSL_ERROR_WANT_READ ||
-            err == SSL_ERROR_WANT_WRITE)
-            return OK;
+        if (err == SSL_ERROR_WANT_READ) {
+            // No more data available now
+            break;
+        }
 
-        return SSL_RECV_FAIL;
+        if (err == SSL_ERROR_WANT_WRITE) {
+            // Need to wait for writability; enable EPOLLOUT and then
+            // continue to process any data already read.
+            need_epoll_out = 1;
+            break;
+        }
+
+        return RECV_FAIL;
     }
 
-    c->in_len += r;
+    if (need_epoll_out) {
+        struct epoll_event ev;
+        ev.events = EPOLLIN | EPOLLOUT | EPOLLET;
+        ev.data.ptr = c;
+        epoll_ctl(epoll_fd, EPOLL_CTL_MOD, c->socket, &ev);
+    }
 
     while (c->in_len >= 4)
     {
@@ -202,7 +248,7 @@ static int handle_recv(ClientTLS *c, int epoll_fd)
         memcpy(&msg_len, c->in_buffer, 4);
         msg_len = ntohl(msg_len);
 
-        if (msg_len > MAX_MESSAGE_SIZE)
+        if (msg_len > OUTPUT_BUFFER_SIZE)
             return BUFFER_OVERFLOW;
 
         if (c->in_len < 4 + msg_len)
@@ -219,18 +265,19 @@ static int handle_recv(ClientTLS *c, int epoll_fd)
 
             short err = queue_packet(dst, payload, msg_len);
             if (err != OK) {
-                print_error_server(err);
-				continue;
+				print_error_server(err);
+				mark_client_for_close(dst);
+                continue;
             }
 
-			// Enable EPOLLOUT for the destination client
+            // Enable EPOLLOUT for the destination client
             struct epoll_event ev;
             ev.events = EPOLLIN | EPOLLOUT | EPOLLET;
             ev.data.ptr = dst;
             epoll_ctl(epoll_fd,
                 EPOLL_CTL_MOD,
                 dst->socket,
-				&ev);
+                &ev);
         }
 
         memmove(
@@ -307,8 +354,7 @@ int main()
     int epoll_fd = epoll_create1(0);
 
     struct epoll_event ev;
-    struct epoll_event *events =
-        malloc(sizeof(struct epoll_event) * MAX_EVENTS);
+    struct epoll_event events[MAX_EVENTS];
 
     // server socket already created, bound, listening, non-blocking
 
@@ -362,7 +408,9 @@ int main()
                         client_fd,
                         &client_ev);
 
+#ifdef DEBUG
 					printf("New client connected!\n");
+#endif
                 }
             }
             else {
@@ -372,14 +420,14 @@ int main()
 				// Check for hangup or error
                 if (events[i].events & (EPOLLHUP | EPOLLERR))
                 {
-                    remove_client(c);
+                    mark_client_for_close(c);
                     continue;
                 }
 
-                if (c->state == STATE_HANDSHAKING)
+                if (c->flags.state == STATE_HANDSHAKING)
                 {
                     if (handle_handshake(epoll_fd, c) != OK)
-                        remove_client(c);
+                        mark_client_for_close(c);
 
                     continue;
                 }
@@ -387,21 +435,10 @@ int main()
                 // READ
                 if (events[i].events & EPOLLIN)
                 {
-                    while (1)
-                    {
-                        int err = handle_recv(c, epoll_fd);
+                    int err = handle_recv(c, epoll_fd);
 
-                        if (err == OK) {
-                            // If SSL_read inside returned WANT_* —
-                            // handle_recv will return OK,
-                            // but there is no more data.
-                            // Exit the loop.
-                            break;
-                        }
-                        else {
-                            remove_client(c);
-                            break;
-                        }
+                    if (err != OK) {
+                        mark_client_for_close(c);
                     }
                 }
 
@@ -411,7 +448,7 @@ int main()
                     SERVER_STATUS err = flush_send(c);
 
                     if (err != OK) {
-                        remove_client(c);
+                        mark_client_for_close(c);
                         continue;
                     }
 
@@ -429,11 +466,23 @@ int main()
                     }
                 }
 
-                if (events[i].events &
-                    (EPOLLHUP | EPOLLERR))
+                if (events[i].events & (EPOLLHUP | EPOLLERR))
                 {
-                    remove_client(c);
+                    remove_client(epoll_fd, c);
                 }
+            }
+
+            for (size_t i = 0; i < clients.size; )
+            {
+                ClientTLS *c = clients.data[i];
+
+                if (c->flags.closing)
+                {
+                    remove_client(epoll_fd, c);
+                    continue;
+                }
+
+                i++;
             }
         }
     }

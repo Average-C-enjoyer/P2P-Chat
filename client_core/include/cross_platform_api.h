@@ -16,8 +16,8 @@ typedef enum {
     TLS_BAD_CERT = -2,
     TLS_BAD_KEY = -3,
     SSL_ACCEPT_FAIL = -4,
-    SSL_SEND_FAIL = -5,
-    SSL_RECV_FAIL = -6,
+    SEND_FAIL = -5,
+    RECV_FAIL = -6,
     BUFFER_OVERFLOW = -7,
 } TLS_STATE;
 
@@ -35,10 +35,10 @@ static inline void tls_print_error(TLS_STATE err) {
     case SSL_ACCEPT_FAIL:
         fprintf(stderr, "TLS handshake failed\n");
         break;
-    case SSL_SEND_FAIL:
+    case SEND_FAIL:
         fprintf(stderr, "Failed to send data over TLS\n");
         break;
-    case SSL_RECV_FAIL:
+    case RECV_FAIL:
         fprintf(stderr, "Failed to receive data over TLS\n");
         break;
     case BUFFER_OVERFLOW:

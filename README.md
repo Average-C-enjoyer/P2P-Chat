@@ -10,13 +10,13 @@ The project focuses on clean architecture, separation of concerns and efficient 
 
 ## Features
 
-✅ Multiple concurrent clients
-✅ Non-blocking server built on **epoll (edge-triggered mode)**
-✅ TLS encryption via OpenSSL
-✅ Clean separation between client and server APIs
-✅ Modular client architecture (core + UI)
-✅ Cross-platform client (Linux / Windows)
-✅ Linux-first server implementation
+* Multiple concurrent clients
+* Non-blocking server built on **epoll (edge-triggered mode)**
+* TLS encryption via OpenSSL
+* Clean separation between client and server APIs
+* Modular client architecture (core + UI)
+* Cross-platform client (Linux / Windows)
+* Linux-first server implementation
 
 ---
 

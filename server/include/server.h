@@ -22,15 +22,17 @@
 
 #include "darray.h"
 
-#define DEFAULT_PORT "4444"
-#define MAX_MESSAGE_SIZE 4096
+#define DEFAULT_PORT "4433"
 #define INPUT_BUFFER_SIZE 4096
+#define OUTPUT_BUFFER_SIZE 4096
 
 #define MAX_EVENTS 8192
 
 #define set_nonblocking(fd) fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK)
 
 #define ERROR(msg) fprintf(stderr, "%s: %s\n", msg, strerror(errno))
+
+#define mark_client_for_close(c) ((c)->flags.closing = 1)
 
 // Enums for error handling
 typedef enum {
@@ -43,31 +45,35 @@ typedef enum {
     TLS_BAD_CONTEXT = -1,
     TLS_BAD_CERT = -2,
     TLS_BAD_KEY = -3,
-    SSL_INIT_FAIL = -4,
-    SSL_ACCEPT_FAIL = -5,
-    SSL_SEND_FAIL = -6,
-    SSL_RECV_FAIL = -7,
+    CLIENT_INIT_FAIL = -4,
+    CLIENT_HANDSHAKE_FAIL = -5,
+    SEND_FAIL = -6,
+    RECV_FAIL = -7,
     BUFFER_OVERFLOW = -8,
 	REMOVE_CLIENT_FAIL = -9
 } SERVER_STATUS;
 
+typedef struct {
+	CLIENT_STATE   state   : 1;
+    int            closing : 1;
+}ClientFlags;
 
 typedef struct {
-    int socket;
-    char name[16];
+    int            socket;
+	ClientFlags    flags;
 
-    CLIENT_STATE state;
+    size_t         in_len;
 
-    SSL *ssl;
+    size_t         out_len;
+    size_t         out_sent;     // bytes already sent from out_buffer
 
-    unsigned char in_buffer[INPUT_BUFFER_SIZE];
-    size_t in_len;
+    size_t         index;        // index in clients arr (for O(1) delete)
 
-    unsigned char out_buffer[INPUT_BUFFER_SIZE];
-    size_t out_len;
-    size_t out_sent; // bytes already sent from out_buffer
+    unsigned char  in_buffer[INPUT_BUFFER_SIZE];
+    unsigned char  out_buffer[OUTPUT_BUFFER_SIZE];
+    char           name[16];
 
-    size_t index; // index in clients arr (for O(1) delete)
+    SSL           *ssl;
 } ClientTLS;
 
 
@@ -82,16 +88,16 @@ static inline void print_error_server(SERVER_STATUS err) {
     case TLS_BAD_KEY:
         ERROR("Failed to load TLS private key");
         break;
-    case SSL_INIT_FAIL:
+    case CLIENT_INIT_FAIL:
         ERROR("SSL initialization failed");
 		break;
-    case SSL_ACCEPT_FAIL:
+    case CLIENT_HANDSHAKE_FAIL:
         ERROR("TLS handshake failed");
 		break;
-    case SSL_SEND_FAIL:
+    case SEND_FAIL:
         ERROR("SSL send failed");
         break;
-    case SSL_RECV_FAIL:
+    case RECV_FAIL:
         ERROR("SSL receive failed");
         break;
     case BUFFER_OVERFLOW:
