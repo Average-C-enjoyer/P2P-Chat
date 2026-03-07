@@ -68,21 +68,36 @@ The server is designed specifically for Linux.
 
 ---
 
-## Project Structure (simplified)
+## Project Structure
 
 ```
-/client
-    /core
-    /ui
-
-/server
-
-/common
-    dynamic data structures only
+.
+├── cli_client      # Ui wrapper for command line. Gui will be added later
+│   ├── EChat_cli.c
+│   ├── include
+│   │   ├── menu.h
+│   │   └── terminal.h
+│   └── src
+│       ├── menu.c
+│       └── terminal.c
+├── client_core     # Core with main functionality
+│   ├── include
+│   │   ├── TLS.h
+│   │   ├── client_core.h
+│   │   └── cross_platform_api.h
+│   └── src
+│       └── client_core.c
+├── server          # Server directory
+│   ├── include
+│   │   └── server.h
+│   ├── server.c
+│   └── src
+├── tests
+│   └── test_menu.c
+└── utils           # Data structeres and utility funcs
+    ├── String.h
+    └── darray.h
 ```
-
-Client and server no longer share internal headers or APIs.
-Only reusable dynamic structures are placed in `/common`.
 
 ---
 
