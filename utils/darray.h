@@ -26,6 +26,14 @@ typedef struct {             \
 	short        err;        \
 } Array_##type;
 
+#define define_ptr_array(type)   \
+typedef struct {             \
+	type		**data;      \
+	size_t	     size;       \
+	size_t       capacity;   \
+	short        err;        \
+} Array_##type;
+
 #define da_init(a)           \
 	do {                     \
 		(a)->data = NULL;    \

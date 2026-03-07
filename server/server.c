@@ -1,8 +1,8 @@
 #include "server.h"
 #include "darray.h"
+#include "linked_list.h"
 
-define_array(ClientTLS);
-Array_ClientTLS clients;
+LinkedList clients;
 
 static SSL_CTX *server_ctx = NULL;
 
@@ -31,22 +31,24 @@ static SERVER_STATUS init_tls_server()
 
 static SERVER_STATUS add_client(int sock)
 {
-    ClientTLS c;
-    memset(&c, 0, sizeof(c));
+    ClientTLS *c = malloc(sizeof(ClientTLS));
+    if (!c)
+        return SSL_INIT_FAIL;
+    memset(c, 0, sizeof(ClientTLS));
 
-    c.socket = sock;
-    c.state = STATE_HANDSHAKING;
+    c->socket = sock;
+    c->state = STATE_HANDSHAKING;
 
-    c.ssl = SSL_new(server_ctx);
-    if (!c.ssl)
+    c->ssl = SSL_new(server_ctx);
+    if (!c->ssl)
         return SSL_INIT_FAIL;
 
-    if (SSL_set_fd(c.ssl, (int)sock) <= 0)
+    if (SSL_set_fd(c->ssl, (int)sock) <= 0)
 		return SSL_INIT_FAIL;
 
     set_nonblocking(sock);
 
-    da_append(&clients, c);
+    ll_append(&clients, c);
     return OK;
 }
 
@@ -54,13 +56,46 @@ static SERVER_STATUS add_client(int sock)
 // Removes a client, cleaning up resources
 static SERVER_STATUS remove_client(ClientTLS *c)
 {
+    if (!c) return OK;
+
     SSL_shutdown(c->ssl);
     SSL_free(c->ssl);
     close(c->socket);
 
-    size_t index = c - clients.data;
-    da_delete(&clients, index);
-    da_handle_error(&clients);
+    if (clients.size == 0) {
+        free(c);
+        return OK;
+    }
+
+    size_t idx = c->index;
+    if (idx >= clients.size) {
+        // invalid index — fall to linear search to be safe
+        Node *current = clients.head;
+        size_t i = 0;
+        while (current != NULL) {
+            if (current->data == c) {
+                idx = i;
+                break;
+            }
+            current = current->next;
+            i++;
+        }
+    }
+
+    size_t last = clients.size - 1;
+    if (idx != last) {
+        // move last element into removed slot
+        ClientTLS *moved = (ClientTLS *)ll_get(&clients, last);
+        if (!moved) {
+            free(c);
+            return OK;
+		}
+        ll_insert(&clients, idx, (void *)moved);
+        moved->index = idx;
+    }
+
+    ll_remove(&clients, last);
+    free(c);
 
     return OK;
 }
@@ -132,7 +167,6 @@ static SERVER_STATUS queue_packet(ClientTLS *c,
 
 static SERVER_STATUS flush_send(ClientTLS *c)
 {
-    printf("sending message: %s\n", c->out_buffer);
     while (c->out_sent < c->out_len)
     {
         int r = SSL_write(
@@ -170,8 +204,6 @@ static int handle_recv(ClientTLS *c, int epoll_fd)
         INPUT_BUFFER_SIZE - c->in_len
     );
 
-    printf("Received: %s\n", c->in_buffer + c->in_len);
-
     if (r <= 0)
     {
         int err = SSL_get_error(c->ssl, r);
@@ -203,7 +235,7 @@ static int handle_recv(ClientTLS *c, int epoll_fd)
         // Bradcast
         for (size_t i = 0; i < clients.size; i++)
         {
-            ClientTLS *dst = &clients.data[i];
+            ClientTLS *dst = (ClientTLS *)ll_get(&clients, i);
             if (dst == c) continue;
 
             short err = queue_packet(dst, payload, msg_len);
@@ -247,7 +279,7 @@ int main()
         return 1;
     }
 
-    da_init(&clients);
+    ll_init(&clients);
 
     memset(&hints, 0, sizeof(hints));
     hints.ai_family = AF_INET;
@@ -338,11 +370,11 @@ int main()
                         continue;
                     }
 
-                    ClientTLS *c = &clients.data[clients.size - 1];
+                    ClientTLS *c = (ClientTLS *)ll_get(&clients, clients.size - 1);
 
                     struct epoll_event client_ev;
                     client_ev.events = EPOLLIN | EPOLLET;
-                    client_ev.data.ptr = c;
+                    client_ev.data.ptr = (ClientTLS *)c;
 
                     epoll_ctl(epoll_fd,
                         EPOLL_CTL_ADD,

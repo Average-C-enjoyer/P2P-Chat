@@ -63,10 +63,12 @@ typedef struct {
     unsigned char out_buffer[INPUT_BUFFER_SIZE];
     size_t out_len;
     size_t out_sent; // bytes already sent from out_buffer
+
+    size_t index; // индекс в массиве clients (для O(1) удаления)
 } ClientTLS;
 
 
-extern inline void print_error_server(SERVER_STATUS err) {
+static inline void print_error_server(SERVER_STATUS err) {
     switch (err) {
     case TLS_BAD_CONTEXT:
         ERROR("TLS context initialization failed");
