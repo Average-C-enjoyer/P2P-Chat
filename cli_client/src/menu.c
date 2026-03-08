@@ -1,7 +1,6 @@
 ﻿#include "menu.h"
 #include "terminal.h"
 
-
 // Start menu assets
 const char hint[] = "\n\n\n\n\tUse \x1B[32mUP\x1B[0m and \x1B[32mDOWN\x1B[0m arrows to navigate, \x1B[32mENTER\x1B[0m to select\n\n";
 

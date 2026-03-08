@@ -46,8 +46,8 @@ typedef struct {             \
 		(a)->capacity = 0;   \
 	} while (0)
 
-// Internal macro to handle realloc and error checking (do not use in code directly)
-#define __GROW_ARRAY(a) do {                                         \
+// Internal macros to handle realloc and error checking (do not use in code directly)
+#define ral_array_grow_internal(a) do {                              \
 	size_t old_cap = (a)->capacity;                                  \
 	size_t new_cap = old_cap ? old_cap + old_cap / 2 : 32;           \
                                                                      \
@@ -67,7 +67,7 @@ typedef struct {             \
 	(a)->err = DA_OK;                                                \
 } while(0)
 
-#define __REALLOC_ARRAY(a) do {                                             \
+#define ral_ralloc_array_internal(a) do {                                   \
 	void *tmp = realloc((a)->data, (a)->capacity * sizeof(*((a)->data)));   \
 	if (!tmp) { (a)->err = DA_ERR_NOMEM; break; }                           \
 	(a)->data = tmp;                                                        \
@@ -78,7 +78,7 @@ typedef struct {             \
 // Append value to the end of the array, resizing if necessary
 #define da_append(a, value) do {                         \
 	if ((a)->size >= (a)->capacity) {                    \
-		__GROW_ARRAY(a);                                 \
+		ral_array_grow_internal(a);                      \
 		if ((a)->err) break;                             \
 	}                                                    \
 	(a)->data[(a)->size++] = value;                      \
@@ -94,7 +94,7 @@ typedef struct {             \
 		break;                                           \
 	}                                                    \
 	(a)->capacity = (a)->size;                           \
-	__REALLOC_ARRAY(a);                                  \
+	ral_ralloc_array_internal(a);                        \
 	if ((a)->err) break;		                         \
 	(a)->err = DA_OK;                                    \
 } while(0)
@@ -123,7 +123,7 @@ typedef struct {             \
 	}                                                    \
 	                                                     \
 	if ((a)->size >= (a)->capacity) {                    \
-		__GROW_ARRAY(a);                                 \
+		ral_array_grow_internal(a);                      \
 		if ((a)->err) break;                             \
 	}                                                    \
 	                                                     \

@@ -49,7 +49,6 @@ int main(int argc, char *argv[]) {
     system("stty sane");
 #endif
 
-	printf("Connecting to server at %s:%s...\n", ip, DEFAULT_PORT);
     short err = init_TLS_and_sock(&client, &hints, &result, ip);
     if (err < 0) {
         client_print_error(err);

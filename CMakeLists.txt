@@ -10,6 +10,8 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 # ===============================
 
 find_package(OpenSSL REQUIRED)
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(JEMALLOC REQUIRED jemalloc)
 
 # ===============================
 # Libraries
@@ -62,12 +64,14 @@ if(UNIX AND NOT WIN32)
         PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}/server/include
             ${CMAKE_CURRENT_SOURCE_DIR}/utils
+            ${JEMALLOC_INCLUDE_DIRS}
     )
 
     target_link_libraries(server
         PRIVATE
             OpenSSL::SSL
             OpenSSL::Crypto
+            ${JEMALLOC_LIBRARIES}
     )
 
 endif()

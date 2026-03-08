@@ -16,15 +16,15 @@ static SERVER_STATUS init_tls_server()
     SSL_load_error_strings();
 
     server_ctx = SSL_CTX_new(TLS_server_method());
-    if (!server_ctx)
+    if (unlikely(!server_ctx))
         return TLS_BAD_CONTEXT;
 
-    if (SSL_CTX_use_certificate_file(server_ctx,
-        "server.crt", SSL_FILETYPE_PEM) <= 0)
+    if (unlikely(SSL_CTX_use_certificate_file(server_ctx,
+        "server.crt", SSL_FILETYPE_PEM) <= 0))
         return TLS_BAD_CERT;
 
-    if (SSL_CTX_use_PrivateKey_file(server_ctx,
-        "server.key", SSL_FILETYPE_PEM) <= 0)
+    if (unlikely(SSL_CTX_use_PrivateKey_file(server_ctx,
+        "server.key", SSL_FILETYPE_PEM) <= 0))
         return TLS_BAD_KEY;
 
     return OK;
@@ -34,20 +34,20 @@ static SERVER_STATUS init_tls_server()
 static SERVER_STATUS add_client(int sock)
 {
     ClientTLS *c = malloc(sizeof(ClientTLS));
-    if (!c)
+    if (unlikely(!c))
         return CLIENT_INIT_FAIL;
     memset(c, 0, sizeof(ClientTLS));
 
     c->socket = sock;
-    c->flags.state = STATE_HANDSHAKING;
+    c->flags.state = HANDSHAKING;
 
     c->ssl = SSL_new(server_ctx);
-    if (!c->ssl) {
+    if (unlikely(!c->ssl)) {
         free(c);
         return CLIENT_INIT_FAIL;
     }
 
-    if (SSL_set_fd(c->ssl, (int)sock) <= 0) {
+    if (unlikely(SSL_set_fd(c->ssl, (int)sock) <= 0)) {
         free(c);
         return CLIENT_INIT_FAIL;
     }
@@ -55,7 +55,7 @@ static SERVER_STATUS add_client(int sock)
     set_nonblocking(sock);
 
     da_append(&clients, c);
-    if (da_get_last_err(&clients) != DA_OK) {
+    if (unlikely(da_get_last_err(&clients) != DA_OK)) {
         free(c);
         da_print_error(clients.err);
         return CLIENT_INIT_FAIL;
@@ -82,7 +82,7 @@ static SERVER_STATUS remove_client(int epoll_fd, ClientTLS *c)
 
     da_swap_remove_ptr(&clients, c->index);
 
-    if (da_get_last_err(&clients) != DA_OK) {
+    if (unlikely(da_get_last_err(&clients) != DA_OK)) {
         da_print_error(clients.err);
         return REMOVE_CLIENT_FAIL;
     }
@@ -98,7 +98,7 @@ static SERVER_STATUS handle_handshake(int epoll_fd, ClientTLS *c)
 
     if (r == 1)
     {
-        c->flags.state = STATE_CONNECTED;
+        c->flags.state = CONNECTED;
 
         struct epoll_event ev;
         ev.events = EPOLLIN | EPOLLET;
@@ -138,10 +138,10 @@ static SERVER_STATUS queue_packet(ClientTLS *c,
     const unsigned char *data,
     uint32_t len)
 {
-    if (len > INPUT_BUFFER_SIZE)
+    if (unlikely(len > INPUT_BUFFER_SIZE))
         return BUFFER_OVERFLOW;
 
-    if (c->out_len + 4 + len > OUTPUT_BUFFER_SIZE)
+    if (unlikely(c->out_len + 4 + len > OUTPUT_BUFFER_SIZE))
         return BUFFER_OVERFLOW;
 
     uint32_t net_len = htonl(len);
@@ -194,7 +194,7 @@ static int handle_recv(ClientTLS *c, int epoll_fd)
     while (1)
     {
         size_t avail = INPUT_BUFFER_SIZE - c->in_len;
-        if (avail == 0) {
+        if (unlikely(avail == 0)) {
             // no space to read more
             return BUFFER_OVERFLOW;
         }
@@ -226,8 +226,6 @@ static int handle_recv(ClientTLS *c, int epoll_fd)
         }
 
         if (err == SSL_ERROR_WANT_WRITE) {
-            // Need to wait for writability; enable EPOLLOUT and then
-            // continue to process any data already read.
             need_epoll_out = 1;
             break;
         }
@@ -248,7 +246,7 @@ static int handle_recv(ClientTLS *c, int epoll_fd)
         memcpy(&msg_len, c->in_buffer, 4);
         msg_len = ntohl(msg_len);
 
-        if (msg_len > OUTPUT_BUFFER_SIZE)
+        if (unlikely(msg_len > OUTPUT_BUFFER_SIZE))
             return BUFFER_OVERFLOW;
 
         if (c->in_len < 4 + msg_len)
@@ -264,7 +262,7 @@ static int handle_recv(ClientTLS *c, int epoll_fd)
             if (dst == c) continue;
 
             short err = queue_packet(dst, payload, msg_len);
-            if (err != OK) {
+            if (unlikely(err != OK)) {
 				print_error_server(err);
 				mark_client_for_close(dst);
                 continue;
@@ -324,25 +322,29 @@ int main()
         result->ai_socktype,
         result->ai_protocol);
 
-    if (serverSocket < 0) {
+    if (unlikely(serverSocket < 0)) {
         ERROR("Failed to create socket");
         return 1;
     }
 
     int opt = 1;
-    if (setsockopt(serverSocket, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) < 0) {
+    if (unlikely(setsockopt(serverSocket, 
+                            SOL_SOCKET, SO_REUSEADDR, 
+                            &opt, 
+                            sizeof(opt)) < 0)) 
+    {
         ERROR("setsockopt(SO_REUSEADDR) failed");
         close(serverSocket);
         return 1;
     }
 
-    if (bind(serverSocket, result->ai_addr, result->ai_addrlen) < 0) {
+    if (unlikely(bind(serverSocket, result->ai_addr, result->ai_addrlen) < 0)) {
         ERROR("Failed to bind socket");
         close(serverSocket);
 		return 1;
     }
 
-    if (listen(serverSocket, SOMAXCONN) < 0) {
+    if (unlikely(listen(serverSocket, SOMAXCONN) < 0)) {
 		ERROR("Failed to listen on socket");
 		close(serverSocket);
         return 1;
@@ -391,7 +393,7 @@ int main()
                         }
                     }
 
-                    if (add_client(client_fd) != OK) {
+                    if (unlikely(add_client(client_fd) != OK)) {
                         close(client_fd);
                         ERROR("Failed to add client");
                         continue;
@@ -424,7 +426,7 @@ int main()
                     continue;
                 }
 
-                if (c->flags.state == STATE_HANDSHAKING)
+                if (c->flags.state == HANDSHAKING)
                 {
                     if (handle_handshake(epoll_fd, c) != OK)
                         mark_client_for_close(c);
@@ -468,7 +470,9 @@ int main()
 
                 if (events[i].events & (EPOLLHUP | EPOLLERR))
                 {
-                    remove_client(epoll_fd, c);
+                    if (unlikely(remove_client(epoll_fd, c) != OK)) {
+                        ERROR("Failed to remove client");
+                    }
                 }
             }
 
@@ -478,7 +482,9 @@ int main()
 
                 if (c->flags.closing)
                 {
-                    remove_client(epoll_fd, c);
+                    if (unlikely(remove_client(epoll_fd, c) != OK)) {
+                        ERROR("Failed to remove client");
+                    }
                     continue;
                 }
 

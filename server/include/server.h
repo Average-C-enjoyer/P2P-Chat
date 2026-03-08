@@ -28,16 +28,18 @@
 
 #define MAX_EVENTS 8192
 
-#define set_nonblocking(fd) fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK)
-
 #define ERROR(msg) fprintf(stderr, "%s: %s\n", msg, strerror(errno))
 
+#define set_nonblocking(fd) fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK)
 #define mark_client_for_close(c) ((c)->flags.closing = 1)
+
+#define likely(x)   __builtin_expect(!!(x), 1)
+#define unlikely(x) __builtin_expect(!!(x), 0)
 
 // Enums for error handling
 typedef enum {
-    STATE_HANDSHAKING,
-    STATE_CONNECTED
+    HANDSHAKING,
+    CONNECTED
 } CLIENT_STATE;
 
 typedef enum {
@@ -54,26 +56,26 @@ typedef enum {
 } SERVER_STATUS;
 
 typedef struct {
-	CLIENT_STATE   state   : 1;
-    int            closing : 1;
-}ClientFlags;
+    uint8_t        state   : 1;
+    uint8_t        closing : 1;
+} ClientFlags;
 
 typedef struct {
     int            socket;
-	ClientFlags    flags;
+    ClientFlags    flags;
 
+    SSL           *ssl;
+
+    size_t         index;      // index in the clients array
     size_t         in_len;
 
     size_t         out_len;
-    size_t         out_sent;     // bytes already sent from out_buffer
+    size_t         out_sent;   // bytes already sent from out_buffer
 
-    size_t         index;        // index in clients arr (for O(1) delete)
-
-    unsigned char  in_buffer[INPUT_BUFFER_SIZE];
-    unsigned char  out_buffer[OUTPUT_BUFFER_SIZE];
     char           name[16];
 
-    SSL           *ssl;
+    uint8_t        in_buffer[INPUT_BUFFER_SIZE];
+    uint8_t        out_buffer[OUTPUT_BUFFER_SIZE];
 } ClientTLS;
 
 
