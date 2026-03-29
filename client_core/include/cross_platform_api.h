@@ -11,14 +11,14 @@
 
 // Error codes for TLS operations
 typedef enum {
-    TLS_OK = 0,
-    TLS_BAD_CONTEXT = -1,
-    TLS_BAD_CERT = -2,
-    TLS_BAD_KEY = -3,
-    SSL_ACCEPT_FAIL = -4,
-    SEND_FAIL = -5,
-    RECV_FAIL = -6,
-    BUFFER_OVERFLOW = -7,
+    TLS_OK           =  0,
+    TLS_BAD_CONTEXT  = -1,
+    TLS_BAD_CERT     = -2,
+    TLS_BAD_KEY      = -3,
+    SSL_ACCEPT_FAIL  = -4,
+    SEND_FAIL        = -5,
+    RECV_FAIL        = -6,
+    BUFFER_OVERFLOW  = -7,
 } TLS_STATE;
 
 static inline void tls_print_error(TLS_STATE err) {
@@ -72,7 +72,7 @@ typedef SOCKET SOCKET_T;
 #define GET_LAST_ERROR() WSAGetLastError()
 #define SEND_ERROR SOCKET_ERROR
 
-#define INIT_WINSOCK() do {                               \
+#define INIT_WINSOCK() do {                                   \
         WSADATA wsaData;                                      \
             if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {  \
             printf("WSAStartup failed.\n");                   \
@@ -105,8 +105,8 @@ typedef int SOCKET_T;
 #define GET_LAST_ERROR() errno
 #define SEND_ERROR -1
 
-#define INIT_WINSOCK() ((void)0)
-#define WSA_CLEANUP() ((void)0)
+#define INIT_WINSOCK()
+#define WSA_CLEANUP()
 
 // Threading macros
 typedef pthread_t THREAD;
@@ -116,7 +116,7 @@ typedef pthread_t THREAD;
 #define THREAD_SLEEP(ms) usleep((ms)*1000)
 
 // No special terminal handling needed on POSIX
-#define EnableVTMode() ((void)0)
+#define EnableVTMode()
 
 #define ClientSendMessage(client) \
         void* ClientSendMessage(ClientTLS *client)
@@ -124,19 +124,6 @@ typedef pthread_t THREAD;
         void* ClientRecieveMessage(void *lpParam)
 
 #endif // _WIN32
-
-
-// Client structure for TLS connections
-typedef struct {
-    SOCKET_T socket;
-    char name[16];
-
-    SSL *ssl;
-    SSL_CTX *ctx;
-
-    unsigned char in_buffer[INPUT_BUFFER_SIZE];
-    size_t in_len;
-} ClientTLS;
 
 #define CLEANUP_CLIENT(client) do {  \
 	SSL_free((client)->ssl);         \

@@ -3,8 +3,6 @@
 #include <stdio.h>
 
 #include "cross_platform_api.h"
-#include "darray.h"
-#include "String.h"
 #include "TLS.h"
 
 #define DEFAULT_PORT "4433"
@@ -24,6 +22,21 @@ typedef enum {
 	ERR_CONNECT = -3
 } CLIENT_STATE;
 
+
+// Client structure for TLS connections
+typedef struct {
+	uint8_t   in_buffer[INPUT_BUFFER_SIZE];
+	uint8_t   name[16];
+
+	SSL *ssl;
+	SSL_CTX *ctx;
+
+	size_t    in_len;
+
+	SOCKET_T  socket;
+} ClientTLS;
+
+
 static inline void client_print_error(CLIENT_STATE err) {
 	switch (err) {
 	case ERR_INIT_CREATE_CTX:
@@ -39,8 +52,6 @@ static inline void client_print_error(CLIENT_STATE err) {
 		fprintf(stderr, "Unknown error\n");
 	}
 }
-
-define_array(String);
 
 /* Initialize TLS context, prepare hints and resolve server address */
 CLIENT_STATE init_TLS_and_sock(ClientTLS *client, 

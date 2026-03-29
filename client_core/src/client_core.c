@@ -76,9 +76,12 @@ TLS_STATE TLS_handshake(ClientTLS *client) {
     client->ssl = SSL_new(client->ctx);
     SSL_set_fd(client->ssl, (int)client->socket);
 
+    printf("done\n");
+
     if (SSL_connect(client->ssl) <= 0)
     {
         ERR_print_errors_fp(stderr);
+        perror("SSL_connect failed");
         return SSL_ACCEPT_FAIL;
     }
     printf("Verifying certificate...\n");

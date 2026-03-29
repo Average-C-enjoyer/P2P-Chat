@@ -6,9 +6,6 @@
 
 // TODO: Add users amount handling for personal chats
 
-// =====================
-// MAIN
-// =====================
 int main(int argc, char *argv[]) {
     char ip[IP_LENGTH];
     
@@ -89,13 +86,6 @@ int main(int argc, char *argv[]) {
 
     system("clear");
     CLEAR_SCREEN();
-
-    // Send the client's name to the server
-    /*send_packet(
-       &client,
-       (unsigned char *)client.name,
-       (uint32_t)strlen(client.name)
-    );*/
 
     // Send and receive threads
     THREAD_CREATE(threads[SEND_THREAD], ClientSendMessage, &client);

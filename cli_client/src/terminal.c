@@ -1,4 +1,5 @@
 #include "terminal.h"
+#include <stdlib.h>
 
 #ifdef _WIN32
 
@@ -18,7 +19,7 @@ void terminal_init(void) {
 	ci.bVisible = FALSE;
 	SetConsoleCursorInfo(hOut, &ci);
 
-	SetConsoleOutputCP(CP_UTF8);                     \
+	SetConsoleOutputCP(CP_UTF8);
 		SetConsoleCP(CP_UTF8);
 }
 

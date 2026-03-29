@@ -13,20 +13,20 @@ typedef enum {
 	DA_ERR_BAD_INDEX,
 } DARRAY_STATUS;
 
-#define define_array(T)      \
-typedef struct {             \
-	T		    *data;       \
-	size_t	     size;       \
-	size_t       capacity;   \
-	short        err;        \
+#define define_array(T)       \
+typedef struct {              \
+	T              *data;     \
+	_Atomic size_t	size;     \
+	_Atomic size_t  capacity; \
+	_Atomic short   err;      \
 } Array_##T;
 
-#define define_ptr_array(T)  \
-typedef struct {             \
-	T          **data;       \
-	size_t	     size;       \
-	size_t       capacity;   \
-	short        err;        \
+#define define_ptr_array(T)   \
+typedef struct {              \
+	T             **data;     \
+	_Atomic size_t	size;     \
+	_Atomic size_t  capacity; \
+	_Atomic short   err;      \
 } Array_##T;
 
 #define da_init(a)           \

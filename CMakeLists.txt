@@ -58,6 +58,7 @@ if(UNIX AND NOT WIN32)
 
     add_executable(server
         server/server.c
+        server/src/server_core.c
     )
 
     target_include_directories(server
@@ -72,6 +73,8 @@ if(UNIX AND NOT WIN32)
             OpenSSL::SSL
             OpenSSL::Crypto
             ${JEMALLOC_LIBRARIES}
+            atomic
+            
     )
 
 endif()
