@@ -9,6 +9,8 @@
 
 #define INPUT_BUFFER_SIZE 4096
 
+#define ERROR(msg) fprintf(stderr, "%s: %s\n", msg, strerror(errno))
+
 // Error codes for TLS operations
 typedef enum {
     TLS_OK           =  0,

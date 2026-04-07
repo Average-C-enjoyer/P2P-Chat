@@ -1,9 +1,7 @@
 #pragma once
 
 #include "darray.h"
-#include "queue.h"
 
-#include <stdint.h>
 #include <openssl/ssl.h>
 #include <errno.h>
 
@@ -17,23 +15,34 @@
 #define DEFAULT_PORT "4433"
 #define INPUT_BUFFER_SIZE 4096
 #define OUTPUT_BUFFER_SIZE 4096
+#define LEN_PREFIX_SIZE 4
 
 #define MAX_EVENTS 8192
 
+// Macro for error logging with strerror
 #define ERROR(msg) fprintf(stderr, "%s: %s\n", msg, strerror(errno))
 
+// Macro to set a file descriptor to non-blocking mode
 #define set_nonblocking(fd) fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK)
+
+// Macro to mark a client for closing by setting the closing flag
 #define mark_client_for_close(c) ((c)->flags.closing = TRUE)
 
 #define likely(x)   __builtin_expect(!!(x), TRUE)
 #define unlikely(x) __builtin_expect(!!(x), FALSE)
 
+// ================================
 // Enums for error handling
+// ================================
+
+// Client state: whether it's still handshaking or fully connected
 typedef enum {
     HANDSHAKING,
     CONNECTED
 } CLIENT_STATE;
 
+// Server status codes for various operations, 
+// including TLS errors, client handling, and epoll control
 typedef enum {
     OK                    =  0,
     TLS_BAD_CONTEXT       = -1,
@@ -44,9 +53,12 @@ typedef enum {
     SEND_FAIL             = -6,
     RECV_FAIL             = -7,
     BUFFER_OVERFLOW       = -8,
-    REMOVE_CLIENT_FAIL    = -9
+    REMOVE_CLIENT_FAIL    = -9,
+    EPOLL_CTL_FAIL        = -10
 } SERVER_STATUS;
 
+// Initialization status codes for server setup, 
+// including socket creation and binding errors
 typedef enum {
     INIT_OK               =  0,
     GETADDRINFO_FAIL      = -1,
@@ -56,44 +68,66 @@ typedef enum {
     LISTEN_FAIL           = -5
 } INIT_STATUS;
 
+// Main server status codes for overall server startup
 typedef enum {
-    INIT_SERVER_FAIL = -1,
-	INIT_TLS_FAIL    = -2,
-	INIT_WORKER_FAIL = -3
+    INIT_SERVER_FAIL      = -1,
+    INIT_TLS_FAIL         = -2
 } SERVER_MAIN_STATUS;
 
 
-typedef struct {
-    _Bool        state;
+// ================================
+// Structs and types
+// ================================
+
+// Flags for client state
+// Field "closing" needs for not closing connection instantly on error
+// but marking it for closing and removing after processing all events
+typedef struct ClientFlags {
+    _Bool        state;       // HANDSHAKING or CONNECTED
     _Bool        closing;
 } ClientFlags;
 
-typedef struct {
-    uint8_t *in_buffer;
-    uint8_t *out_buffer;
+// Struct representing a connected client, including SSL state, buffers, and flags
+typedef struct ClientTLS {
+    SSL *ssl;
 
-    size_t       index;      // index in the clients array
-    size_t       in_len;
+    uint8_t     *out_buffer;
     size_t       out_len;
-    size_t       out_sent;   // bytes already sent from out_buffer
+    size_t       out_sent;    // Bytes already sent from out_buffer
 
-    SSL         *ssl;
-
+    size_t       index;       // index in the clients array
     int          socket;
+    uint32_t     id;          // Unique client ID
     ClientFlags  flags;
 } ClientTLS;
 
+// Define a dynamic array type for ClientTLS pointers
 define_ptr_array(ClientTLS);
 
-typedef struct {
+// Message struct for inter-worker communication 
+// with reference counting 
+typedef struct Message {
+    uint8_t     *data;
+    _Atomic int  refcount;
+    uint32_t     len;
+    uint32_t     sender_id;   // For not echoing msg to sender
+} Message;
+
+// Worker struct representing a worker thread
+// Each worker has its own epoll instance and client list
+typedef struct Worker {
     pthread_t        thread;
     int             *client_fd_queue;
     Array_ClientTLS  clients;
     int              epoll_fd;
-	int 			 event_fd;  // For waking up the worker when new clients are added
-    char           **msg_queue;
+    int 			 event_fd;  // For main notifications
+    Message        **msg_queue;
 } Worker;
 
+
+// ================================
+// Function declarations
+// ================================
 
 // Initializes the TLS server context, loading certificates and keys
 SERVER_STATUS init_tls();
@@ -107,8 +141,8 @@ SERVER_STATUS add_client(Worker *w, int sock);
 // Removes a client, cleaning up resources
 // Returns OK on success, REMOVE_CLIENT_FAIL on failure
 SERVER_STATUS remove_client(
-    Array_ClientTLS *clients, 
-    ClientTLS       *c, 
+    Array_ClientTLS *clients,
+    ClientTLS       *c,
     int              epoll_fd
 );
 
@@ -117,18 +151,18 @@ SERVER_STATUS remove_client(
 // CLIENT_HANDSHAKE_FAIL on failure
 SERVER_STATUS handle_handshake(int epoll_fd, ClientTLS *c);
 
-// Func for broadcasting the message to other clients
+// Func for broadcasting the message to all other clients
 SERVER_STATUS broadcast_message(
-    Array_ClientTLS *clients, 
-    ClientTLS       *c, 
+    Array_ClientTLS *clients,
+    Message         *msg,
     int              epoll_fd
 );
 
 // Handles incoming data from a client, 
 // processing complete messages and returns it
-char *handle_recv( 
-    Array_ClientTLS *clients, 
-    ClientTLS       *c, 
+Message *handle_recv(
+    Array_ClientTLS *clients,
+    ClientTLS       *c,
     int              epoll_fd
 );
 
@@ -137,16 +171,13 @@ SERVER_STATUS flush_send(ClientTLS *c);
 
 // Queues a packet to be sent to the client, adding length prefix and buffering
 static SERVER_STATUS queue_packet(
-    ClientTLS           *c,
-    const unsigned char *data,
-    uint32_t             len
+    ClientTLS *c,
+	uint8_t   *payload,
+    uint32_t   len
 );
 
 // Function to pass into a thread for running a worker
 void *run_worker(void *arg);
-
-// Function for balancing clients to worker threads
-void send_fd_to_worker(Worker *w, int client_fd);
 
 
 static inline void init_worker(Worker *worker)

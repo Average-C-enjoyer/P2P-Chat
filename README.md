@@ -90,12 +90,15 @@ The server is designed specifically for Linux.
 ├── server          # Server directory
 │   ├── include
 │   │   └── server.h
-│   ├── server.c
-│   └── src
+│   ├── src
+|   |   ├── workers.h
+|   |   └── server_core.c
+│   └── server.c
 ├── tests
 │   └── test_menu.c
 └── utils           # Data structeres and utility funcs
     ├── String.h
+    ├── queue.h
     └── darray.h
 ```
 

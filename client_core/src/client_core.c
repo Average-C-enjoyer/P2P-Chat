@@ -102,7 +102,9 @@ TLS_STATE TLS_handshake(ClientTLS *client) {
 static TLS_STATE send_packet(ClientTLS *c, const unsigned char *data, uint32_t len)
 {
     if (len > MAX_MESSAGE_SIZE)
+    {
         return BUFFER_OVERFLOW;
+    }
 
     uint32_t net_len = htonl(len);
 
@@ -141,7 +143,9 @@ static TLS_STATE handle_recv(ClientTLS *c)
         msg_len = ntohl(msg_len);
 
         if (msg_len > MAX_MESSAGE_SIZE)
+        {
             return BUFFER_OVERFLOW;
+        }
 
         if (c->in_len < 4 + msg_len)
             break;

@@ -1,13 +1,16 @@
 #pragma once
 
 #include "server.h"
+#include "queue.h"
+#include <stdatomic.h>
 
 
-void send_fd_to_worker(Worker *w, int client_fd)
+extern Worker *workers;
+extern _Atomic int workers_count;
+
+
+static inline void send_fd_to_worker(Worker *w, int client_fd)
 {
-    if (w->client_fd_queue == NULL) {
-        q_init(w->client_fd_queue, QUEUE_INIT_CAPACITY);
-    }
     q_push(w->client_fd_queue, client_fd);
 
     uint64_t one = 1;
@@ -15,12 +18,12 @@ void send_fd_to_worker(Worker *w, int client_fd)
 }
 
 
-void send_msg_to_worker(Worker *w, char *msg)
+static inline void send_msg_to_worker(Worker *w, Message *msg)
 {
-    if (w->msg_queue == NULL) {
-		q_init(w->msg_queue, QUEUE_INIT_CAPACITY);
-    }
     q_push(w->msg_queue, msg);
+
+    uint64_t one = 1;
+    write(w->event_fd, &one, sizeof(one));
 }
 
 
@@ -30,13 +33,13 @@ void *run_worker(void *arg)
 
     struct epoll_event events[MAX_EVENTS];
 
-    while (1) 
+    while (1)
     {
         int ready = epoll_wait(w->epoll_fd, events, MAX_EVENTS, -1);
-        printf("worker woke up\n");
 
         for (int i = 0; i < ready; i++)
         {
+            // Check if it's a notification from the main thread
             if (events[i].data.fd == w->event_fd)
             {
                 uint64_t val;
@@ -51,6 +54,21 @@ void *run_worker(void *arg)
                     }
 
                     q_pop(w->client_fd_queue);
+                }
+
+                while (!q_is_empty(w->msg_queue))
+                {
+                    Message *msg = q_front(w->msg_queue);
+
+                    broadcast_message(&w->clients, msg, w->epoll_fd);
+
+                    if (atomic_fetch_sub(&msg->refcount, 1) == 1)
+                    {
+                        if (msg->data) free(msg->data);
+                        if (msg) free(msg);
+                    }
+
+                    q_pop(w->msg_queue);
                 }
 
                 continue;
@@ -76,10 +94,21 @@ void *run_worker(void *arg)
             // READ
             if (events[i].events & EPOLLIN)
             {
-                char *message = handle_recv(&w->clients, c, w->epoll_fd);
+                Message *msg = handle_recv(&w->clients, c, w->epoll_fd);
 
-                if (message == NULL) {
-                    mark_client_for_close(c);
+                if (!msg) continue;
+
+                // Set refcount to number of workers for broadcasting
+                msg->refcount = workers_count;
+
+                for (size_t i = 0; i < workers_count; i++)
+                {
+					//if (workers[i].clients.data == NULL) {
+     //                   // No clients in this worker, skip sending the message
+     //                   atomic_fetch_sub(&msg->refcount, 1);
+     //                   continue;
+     //               }
+                    send_msg_to_worker(&workers[i], msg);
                 }
             }
 
@@ -100,10 +129,13 @@ void *run_worker(void *arg)
                     mod.events = EPOLLIN | EPOLLET;
                     mod.data.ptr = c;
 
-                    epoll_ctl(w->epoll_fd,
+                    if (epoll_ctl(w->epoll_fd,
                         EPOLL_CTL_MOD,
                         c->socket,
-                        &mod);
+                        &mod) < 0)
+                    {
+                        ERROR("Disabling EPOLLOUT failed");
+                    }
                 }
             }
         }
@@ -124,4 +156,3 @@ void *run_worker(void *arg)
         }
     }
 }
-
