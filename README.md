@@ -89,9 +89,9 @@ The server is designed specifically for Linux.
 │       └── client_core.c
 ├── server          # Server directory
 │   ├── include
-│   │   └── server.h
+│   │   ├── server.h
+|   |   └── workers.h
 │   ├── src
-|   |   ├── workers.h
 |   |   └── server_core.c
 │   └── server.c
 ├── tests

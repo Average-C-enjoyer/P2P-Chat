@@ -6,10 +6,10 @@
 #include <sys/epoll.h>
 #include <sys/eventfd.h>
 
+// To enable DEBUG() logs, define DEBUG_IMPL
+#define DEBUG_IMPL
 #include "server.h"
 #include "workers.h"
-
-#define DEBUG
 
 SSL_CTX *server_ctx;
 
@@ -108,7 +108,7 @@ INIT_STATUS init_server(int *server_socket)
     set_nonblocking(*server_socket);
     freeaddrinfo(result);
 
-    return INIT_OK;
+    return OK;
 }
 
 
@@ -129,6 +129,13 @@ SERVER_STATUS add_client(Worker *w, int sock)
 
     c->out_buffer = malloc(OUTPUT_BUFFER_SIZE);
     if (unlikely(!c->out_buffer))
+    {
+        strcpy(err, "Output buffer allocation failed");
+        goto cleanup;
+    }
+
+    c->in_buffer = malloc(OUTPUT_BUFFER_SIZE);
+    if (unlikely(!c->in_buffer))
     {
         strcpy(err, "Output buffer allocation failed");
         goto cleanup;
@@ -172,6 +179,7 @@ SERVER_STATUS add_client(Worker *w, int sock)
         goto cleanup;
     }
 
+    printf("Added client");
     return OK;
 
 cleanup:
@@ -196,6 +204,7 @@ SERVER_STATUS remove_client(Array_ClientTLS *clients, ClientTLS *c, int epoll_fd
         }
     }
 
+    if (c->in_buffer)  free(c->in_buffer);
     if (c->out_buffer) free(c->out_buffer);
 
     SSL_free(c->ssl);
@@ -236,6 +245,7 @@ SERVER_STATUS handle_handshake(int epoll_fd, ClientTLS *c)
             return EPOLL_CTL_FAIL;
         }
 
+		DEBUG("TLS handshake completed");
         return OK;
     }
 
@@ -243,6 +253,7 @@ SERVER_STATUS handle_handshake(int epoll_fd, ClientTLS *c)
 
     if (err == SSL_ERROR_WANT_READ)
     {
+		DEBUG("TLS handshake in progress, waiting for more data");
         return OK;
     }
 
@@ -261,6 +272,7 @@ SERVER_STATUS handle_handshake(int epoll_fd, ClientTLS *c)
             return EPOLL_CTL_FAIL;
         }
 
+		DEBUG("TLS handshake in progress, waiting for socket to be writable");
         return OK;
     }
 
@@ -272,11 +284,8 @@ SERVER_STATUS handle_handshake(int epoll_fd, ClientTLS *c)
 // =====================================
 // Send funcs
 // =====================================
-SERVER_STATUS flush_send(ClientTLS *c)
+SERVER_STATUS flush_send(ClientTLS *c, Worker *w)
 {
-#ifdef DEBUG
-    printf("Sending message: %.*s\n", c->out_len, c->out_buffer);
-#endif
     while (c->out_sent < c->out_len)
     {
         int r = SSL_write(
@@ -302,6 +311,7 @@ SERVER_STATUS flush_send(ClientTLS *c)
 
     c->out_len = 0;
     c->out_sent = 0;
+
     return OK;
 }
 
@@ -309,7 +319,13 @@ SERVER_STATUS flush_send(ClientTLS *c)
 // ============================================
 // Recieve funcs
 // ============================================
-static SERVER_STATUS queue_packet(ClientTLS *c, uint8_t *payload, uint32_t len)
+
+// Queues a packet to be sent to the client, adding length prefix and buffering
+static SERVER_STATUS queue_packet(
+    uint8_t  *out_buffer, 
+    size_t   *out_len, 
+    uint8_t  *payload, 
+    uint32_t  len)
 {
     if (unlikely(len > INPUT_BUFFER_SIZE))
     {
@@ -317,7 +333,7 @@ static SERVER_STATUS queue_packet(ClientTLS *c, uint8_t *payload, uint32_t len)
         return BUFFER_OVERFLOW;
     }
 
-    if (unlikely(c->out_len + LEN_PREFIX_SIZE + len > OUTPUT_BUFFER_SIZE))
+    if (unlikely(*out_len + LEN_PREFIX_SIZE + len > OUTPUT_BUFFER_SIZE))
     {
         ERROR("Buffer overflow: not enough space to queue packet");
         return BUFFER_OVERFLOW;
@@ -326,131 +342,132 @@ static SERVER_STATUS queue_packet(ClientTLS *c, uint8_t *payload, uint32_t len)
     uint32_t net_len = htonl(len);
 
     // Data is buffered as [4-byte length][payload]
-    memcpy(c->out_buffer + c->out_len, &net_len, LEN_PREFIX_SIZE);
-    memcpy(c->out_buffer + c->out_len + LEN_PREFIX_SIZE, payload, len);
+    memcpy(out_buffer + *out_len, &net_len, LEN_PREFIX_SIZE);
+    memcpy(out_buffer + *out_len + LEN_PREFIX_SIZE, payload, len);
 
-    c->out_len += LEN_PREFIX_SIZE + len;
-
-    return OK;
-}
-
-
-SERVER_STATUS broadcast_message(Array_ClientTLS *clients, Message *msg, int epoll_fd)
-{
-     uint32_t msg_len;
-     memcpy(&msg_len, msg->data, LEN_PREFIX_SIZE);
-     msg_len = ntohl(msg_len);
-
-     if (unlikely(msg_len > OUTPUT_BUFFER_SIZE))
-     {
-         ERROR("Buffer overflow: message length too large");
-         return BUFFER_OVERFLOW;
-     }
-
-     /*if (msg->len < LEN_PREFIX_SIZE + msg_len)
-     {
-         break;
-     }*/
-
-     uint8_t *payload = msg->data + LEN_PREFIX_SIZE;
-
-     // Broadcast
-     for (size_t i = 0; i < clients->size; i++)
-     {
-         ClientTLS *dst = clients->data[i];
-         if (dst->id == msg->sender_id) continue;
-
-#ifdef DEBUG
-         printf("Queueing message from client %u to client %u: %.*s\n",
-			 msg->sender_id, dst->id, msg_len, payload);
-#endif
-         if (unlikely(queue_packet(dst, payload, msg_len) != OK))
-         {
-             mark_client_for_close(dst);
-             continue;
-         }
-
-         // Enable EPOLLOUT for the destination client
-         struct epoll_event ev;
-         ev.events = EPOLLIN | EPOLLOUT | EPOLLET;
-         ev.data.ptr = dst;
-         if (epoll_ctl(epoll_fd,
-             EPOLL_CTL_MOD,
-             dst->socket,
-             &ev) < 0)
-         {
-             ERROR("epoll_ctl MOD failed (Adding EPOLLOUT for client)");
-         }
-     }
-
-     if (msg && msg->data)
-     {
-         if (msg->len > LEN_PREFIX_SIZE + msg_len) {
-             memmove(
-                 msg->data,
-                 msg->data + LEN_PREFIX_SIZE + msg_len,
-                 msg->len - LEN_PREFIX_SIZE - msg_len
-             );
-         }
-     }
-
-     // Guard against underflow before the final update
-     uint32_t bytes_to_remove = LEN_PREFIX_SIZE + msg_len;
-     if (msg->len < bytes_to_remove) {
-         ERROR("Message length underflow detected");
-         msg->len = 0;
-         return BUFFER_OVERFLOW;
-     }
-     msg->len -= bytes_to_remove;
+    *out_len += LEN_PREFIX_SIZE + len;
 
     return OK;
 }
 
 
-Message *handle_recv(Array_ClientTLS *clients, ClientTLS *c, int epoll_fd)
+void broadcast_message(Array_ClientTLS *clients, Message *msg, int epoll_fd)
 {
-    _Bool need_epoll_out = FALSE;
-
-    Message *msg = malloc(sizeof(Message) + INPUT_BUFFER_SIZE);
-    if (unlikely(!msg))
+    for (size_t i = 0; i < clients->size; i++)
     {
-        ERROR("Message allocation failed");
-        return NULL;
+        ClientTLS *dst = clients->data[i];
+        if (dst->id == msg->sender_id) continue;
+
+        if (unlikely(queue_packet(dst->out_buffer, &dst->out_len, msg->data, msg->len) != OK))
+        {
+            mark_client_for_close(dst);
+            continue;
+        }
+
+        struct epoll_event ev;
+        ev.events = EPOLLIN | EPOLLOUT | EPOLLET;
+        ev.data.ptr = dst;
+
+        if (epoll_ctl(epoll_fd, EPOLL_CTL_MOD, dst->socket, &ev) < 0)
+        {
+            ERROR("epoll_ctl MOD failed when broadcasting message");
+            mark_client_for_close(dst);
+            continue;
+		}
+    }
+}
+
+
+typedef enum PARSE_STATUS_S {
+    MSG_BAD_SIZE            = -1,
+	MSG_TOO_LARGE           = -2,
+    MSG_BAD_LENGTH          = -3,
+    MSG_BUFFER_ALLOC_FAILED = -4
+} PARSE_STATUS;
+
+// Extracting message from client's tcp buffer
+static inline PARSE_STATUS extract_message(uint8_t *in_buffer, size_t *in_len, Message *msg)
+{
+    // Need at least 4 bytes for length
+    if (*in_len < LEN_PREFIX_SIZE)
+        return MSG_BAD_SIZE;
+
+    uint32_t msg_len;
+    memcpy(&msg_len, in_buffer, LEN_PREFIX_SIZE);
+    msg_len = ntohl(msg_len);
+
+    // Sanity check
+    if (msg_len > INPUT_BUFFER_SIZE)
+    {
+        ERROR("Message too large");
+        return MSG_TOO_LARGE;
     }
 
-    msg->data = malloc(INPUT_BUFFER_SIZE);
+    // Check if full message arrived
+    if (*in_len < LEN_PREFIX_SIZE + msg_len)
+    {
+        return MSG_BAD_LENGTH;
+    }
+
+    msg->data = malloc(msg_len);
     if (unlikely(!msg->data))
     {
         ERROR("Message data allocation failed");
         free(msg);
-        return NULL;
+        return MSG_BUFFER_ALLOC_FAILED;
     }
 
-    msg->refcount = 1;
-    msg->sender_id = c->id;
-	msg->len = 0;
+    memcpy(msg->data, in_buffer + LEN_PREFIX_SIZE, msg_len);
+
+    msg->len = msg_len;
+
+    // Delete handled msg from buffer
+    size_t total = LEN_PREFIX_SIZE + msg_len;
+    size_t remaining = *in_len - total;
+
+    if (remaining > 0)
+    {
+        memmove(
+            in_buffer,
+            in_buffer + total,
+            remaining
+        );
+    }
+
+    *in_len = remaining;
+
+    return OK;
+}
+
+
+SERVER_STATUS handle_recv(
+    Array_ClientTLS *clients,
+    ClientTLS       *c,
+    int              epoll_fd)
+{
+    _Bool need_epoll_out = FALSE;
 
     while (1)
     {
-        size_t avail = INPUT_BUFFER_SIZE - msg->len;
+        size_t avail = INPUT_BUFFER_SIZE - c->in_len;
         if (unlikely(avail == 0))
         {
             // no space to read more
             ERROR("Buffer overflow: message too large");
-            return NULL;
+            break;
         }
 
         int r = SSL_read(
             c->ssl,
-            msg->data + msg->len,
+            c->in_buffer + c->in_len,
             (int)avail
         );
 
         if (r > 0)
         {
-            msg->len += r;
+            c->in_len += r;
             // try to read more until WANT_READ or buffer full
-            if (msg->len == INPUT_BUFFER_SIZE) {
+            if (c->in_len == INPUT_BUFFER_SIZE) {
                 break;
             }
             else {
@@ -474,7 +491,7 @@ Message *handle_recv(Array_ClientTLS *clients, ClientTLS *c, int epoll_fd)
         }
 
         ERROR("SSL receive failed");
-        return NULL;
+        return RECV_FAIL;
     }
 
     if (need_epoll_out)
@@ -482,14 +499,41 @@ Message *handle_recv(Array_ClientTLS *clients, ClientTLS *c, int epoll_fd)
         struct epoll_event ev;
         ev.events = EPOLLIN | EPOLLOUT | EPOLLET;
         ev.data.ptr = c;
-        epoll_ctl(epoll_fd, EPOLL_CTL_MOD, c->socket, &ev);
+        
+        if (epoll_ctl(epoll_fd, EPOLL_CTL_MOD, c->socket, &ev) < 0)
+        {
+            ERROR("epoll_ctl MOD failed after WANT_WRITE in recv");
+            return EPOLL_CTL_FAIL;
+		}
+    }
+    
+    Message *msg;
+
+    // Allocate message
+    msg = malloc(sizeof(Message));
+    if (unlikely(!msg))
+    {
+        ERROR("Message allocation failed");
+        return MSG_BUFFER_ALLOC_FAILED;
     }
 
-#ifdef DEBUG
-	printf("Received message from client %u: %.*s\n", c->id, msg->len, msg->data);
-#endif
+    while (extract_message(c->in_buffer, &c->in_len, msg) == 0)
+    {
+        msg->sender_id = c->id;
 
-    return msg;
+        for (int wi = 0; wi < workers_count; wi++)
+        {
+            /*if (workers[wi].clients.data == NULL) {
+                // No clients in this worker, skip sending the message
+                atomic_fetch_sub(&msg->refcount, 1);
+                continue;
+            }*/
+            send_msg_to_worker(&workers[wi], msg);
+        }
+    }
+
+	DEBUG("Received message\n");
+	return OK;
 }
 
 

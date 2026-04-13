@@ -22,6 +22,17 @@
 // Macro for error logging with strerror
 #define ERROR(msg) fprintf(stderr, "%s: %s\n", msg, strerror(errno))
 
+// Macro for debug logging, can be enabled by defining DEBUG
+#ifdef DEBUG_IMPL
+    #define DEBUG(...)           \
+        do {                     \
+            printf(__VA_ARGS__); \
+            printf("\n");        \
+        } while (0)
+#else
+    #define DEBUG(...)
+#endif
+
 // Macro to set a file descriptor to non-blocking mode
 #define set_nonblocking(fd) fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK)
 
@@ -43,7 +54,7 @@ typedef enum {
 
 // Server status codes for various operations, 
 // including TLS errors, client handling, and epoll control
-typedef enum {
+typedef enum SERVER_STATUS_S {
     OK                    =  0,
     TLS_BAD_CONTEXT       = -1,
     TLS_BAD_CERT          = -2,
@@ -59,8 +70,7 @@ typedef enum {
 
 // Initialization status codes for server setup, 
 // including socket creation and binding errors
-typedef enum {
-    INIT_OK               =  0,
+typedef enum INIT_STATUS_S {
     GETADDRINFO_FAIL      = -1,
     SOCKET_CREATE_FAIL    = -2,
     SETSOCKOPT_FAIL       = -3,
@@ -69,7 +79,7 @@ typedef enum {
 } INIT_STATUS;
 
 // Main server status codes for overall server startup
-typedef enum {
+typedef enum SERVER_MAIN_STATUS_S {
     INIT_SERVER_FAIL      = -1,
     INIT_TLS_FAIL         = -2
 } SERVER_MAIN_STATUS;
@@ -82,14 +92,17 @@ typedef enum {
 // Flags for client state
 // Field "closing" needs for not closing connection instantly on error
 // but marking it for closing and removing after processing all events
-typedef struct ClientFlags {
+typedef struct ClientFlags_s {
     _Bool        state;       // HANDSHAKING or CONNECTED
     _Bool        closing;
 } ClientFlags;
 
 // Struct representing a connected client, including SSL state, buffers, and flags
-typedef struct ClientTLS {
-    SSL *ssl;
+typedef struct ClientTLS_s {
+    SSL         *ssl;
+
+	uint8_t     *in_buffer;
+	size_t       in_len;
 
     uint8_t     *out_buffer;
     size_t       out_len;
@@ -105,8 +118,8 @@ typedef struct ClientTLS {
 define_ptr_array(ClientTLS);
 
 // Message struct for inter-worker communication 
-// with reference counting 
-typedef struct Message {
+// with reference counting
+typedef struct Message_s {
     uint8_t     *data;
     _Atomic int  refcount;
     uint32_t     len;
@@ -115,12 +128,15 @@ typedef struct Message {
 
 // Worker struct representing a worker thread
 // Each worker has its own epoll instance and client list
-typedef struct Worker {
+typedef struct Worker_s {
     pthread_t        thread;
+
     int             *client_fd_queue;
     Array_ClientTLS  clients;
+
     int              epoll_fd;
     int 			 event_fd;  // For main notifications
+
     Message        **msg_queue;
 } Worker;
 
@@ -152,29 +168,23 @@ SERVER_STATUS remove_client(
 SERVER_STATUS handle_handshake(int epoll_fd, ClientTLS *c);
 
 // Func for broadcasting the message to all other clients
-SERVER_STATUS broadcast_message(
-    Array_ClientTLS *clients,
-    Message         *msg,
-    int              epoll_fd
+void broadcast_message(
+    Array_ClientTLS *clients, 
+    Message *msg, 
+    int epoll_fd
 );
 
 // Handles incoming data from a client, 
 // processing complete messages and returns it
-Message *handle_recv(
+SERVER_STATUS handle_recv(
     Array_ClientTLS *clients,
     ClientTLS       *c,
     int              epoll_fd
 );
 
 // Flushes the send buffer for a client, handling partial writes and SSL errors
-SERVER_STATUS flush_send(ClientTLS *c);
+SERVER_STATUS flush_send(ClientTLS *c, Worker *w);
 
-// Queues a packet to be sent to the client, adding length prefix and buffering
-static SERVER_STATUS queue_packet(
-    ClientTLS *c,
-	uint8_t   *payload,
-    uint32_t   len
-);
 
 // Function to pass into a thread for running a worker
 void *run_worker(void *arg);

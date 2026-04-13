@@ -3,11 +3,10 @@
 #include "server.h"
 #include "queue.h"
 #include <stdatomic.h>
-
+#include <unistd.h>
 
 extern Worker *workers;
 extern _Atomic int workers_count;
-
 
 static inline void send_fd_to_worker(Worker *w, int client_fd)
 {
@@ -37,10 +36,10 @@ void *run_worker(void *arg)
     {
         int ready = epoll_wait(w->epoll_fd, events, MAX_EVENTS, -1);
 
-        for (int i = 0; i < ready; i++)
+        for (int ev_idx = 0; ev_idx < ready; ev_idx++)
         {
             // Check if it's a notification from the main thread
-            if (events[i].data.fd == w->event_fd)
+            if (events[ev_idx].data.fd == w->event_fd)
             {
                 uint64_t val;
                 read(w->event_fd, &val, sizeof(val));
@@ -75,10 +74,10 @@ void *run_worker(void *arg)
             }
 
             // CLIENT EVENT
-            ClientTLS *c = events[i].data.ptr;
+            ClientTLS *c = events[ev_idx].data.ptr;
 
             // Check for hangup or error
-            if (events[i].events & (EPOLLHUP | EPOLLERR))
+            if (events[ev_idx].events & (EPOLLHUP | EPOLLERR))
             {
                 mark_client_for_close(c);
                 continue;
@@ -92,30 +91,19 @@ void *run_worker(void *arg)
             }
 
             // READ
-            if (events[i].events & EPOLLIN)
+            if (events[ev_idx].events & EPOLLIN)
             {
-                Message *msg = handle_recv(&w->clients, c, w->epoll_fd);
-
-                if (!msg) continue;
-
-                // Set refcount to number of workers for broadcasting
-                msg->refcount = workers_count;
-
-                for (size_t i = 0; i < workers_count; i++)
+                SERVER_STATUS err = handle_recv(&w->clients, c, w->epoll_fd);
+                if (err < 0)
                 {
-					//if (workers[i].clients.data == NULL) {
-     //                   // No clients in this worker, skip sending the message
-     //                   atomic_fetch_sub(&msg->refcount, 1);
-     //                   continue;
-     //               }
-                    send_msg_to_worker(&workers[i], msg);
+					mark_client_for_close(c);
                 }
             }
 
             // WRITE
-            if (events[i].events & EPOLLOUT)
+            if (events[ev_idx].events & EPOLLOUT)
             {
-                SERVER_STATUS err = flush_send(c);
+                SERVER_STATUS err = flush_send(c, w);
 
                 if (err != OK) {
                     mark_client_for_close(c);
@@ -137,12 +125,13 @@ void *run_worker(void *arg)
                         ERROR("Disabling EPOLLOUT failed");
                     }
                 }
+
             }
         }
 
-        for (size_t i = 0; i < w->clients.size; )
+        for (size_t ci = 0; ci < w->clients.size; )
         {
-            ClientTLS *c = w->clients.data[i];
+            ClientTLS *c = w->clients.data[ci];
 
             if (c->flags.closing)
             {
@@ -152,7 +141,9 @@ void *run_worker(void *arg)
                 continue;
             }
 
-            i++;
+            ci++;
         }
     }
+
+    return NULL;
 }
