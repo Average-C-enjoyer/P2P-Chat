@@ -333,7 +333,7 @@ static SERVER_STATUS queue_packet(
         return BUFFER_OVERFLOW;
     }
 
-    if (unlikely(*out_len + LEN_PREFIX_SIZE + len > OUTPUT_BUFFER_SIZE))
+    if (unlikely(len > OUTPUT_BUFFER_SIZE - *out_len - LEN_PREFIX_SIZE))
     {
         ERROR("Buffer overflow: not enough space to queue packet");
         return BUFFER_OVERFLOW;
@@ -386,11 +386,16 @@ typedef enum PARSE_STATUS_S {
 } PARSE_STATUS;
 
 // Extracting message from client's tcp buffer
-static inline PARSE_STATUS extract_message(uint8_t *in_buffer, size_t *in_len, Message *msg)
+static inline PARSE_STATUS extract_message(
+    uint8_t *in_buffer, 
+    size_t  *in_len, 
+    Message *msg)
 {
     // Need at least 4 bytes for length
     if (*in_len < LEN_PREFIX_SIZE)
+    {
         return MSG_BAD_SIZE;
+    }
 
     uint32_t msg_len;
     memcpy(&msg_len, in_buffer, LEN_PREFIX_SIZE);
@@ -409,16 +414,18 @@ static inline PARSE_STATUS extract_message(uint8_t *in_buffer, size_t *in_len, M
         return MSG_BAD_LENGTH;
     }
 
-    msg->data = malloc(msg_len);
+    Message *msg = malloc(sizeof(Message) + msg_len);
     if (unlikely(!msg->data))
     {
-        ERROR("Message data allocation failed");
-        free(msg);
+        ERROR("Message allocation failed");
         return MSG_BUFFER_ALLOC_FAILED;
     }
 
-    memcpy(msg->data, in_buffer + LEN_PREFIX_SIZE, msg_len);
+	// Data is stored right after the Message struct for cache efficiency and less malloc()
+    msg->data = (uint8_t *)(msg + 1);
 
+	// Copy data from buffer
+    memcpy(msg->data, in_buffer + LEN_PREFIX_SIZE, msg_len);
     msg->len = msg_len;
 
     // Delete handled msg from buffer
@@ -509,25 +516,25 @@ SERVER_STATUS handle_recv(
     
     Message *msg;
 
-    // Allocate message
-    msg = malloc(sizeof(Message));
-    if (unlikely(!msg))
+    int processed = 0;
+    while (1)
     {
-        ERROR("Message allocation failed");
-        return MSG_BUFFER_ALLOC_FAILED;
-    }
+		if (++processed > 1000) {
+            DEBUG("Processed 1000 messages, yielding to avoid starvation");
+            break;
+        }
 
-    while (extract_message(c->in_buffer, &c->in_len, msg) == 0)
-    {
+        if (extract_message(c->in_buffer, &c->in_len, msg) != OK)
+        {
+            free(msg);
+            break;
+        }
+
         msg->sender_id = c->id;
+        msg->refcount = workers_count;
 
         for (int wi = 0; wi < workers_count; wi++)
         {
-            /*if (workers[wi].clients.data == NULL) {
-                // No clients in this worker, skip sending the message
-                atomic_fetch_sub(&msg->refcount, 1);
-                continue;
-            }*/
             send_msg_to_worker(&workers[wi], msg);
         }
     }

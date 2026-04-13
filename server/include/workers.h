@@ -5,9 +5,6 @@
 #include <stdatomic.h>
 #include <unistd.h>
 
-extern Worker *workers;
-extern _Atomic int workers_count;
-
 static inline void send_fd_to_worker(Worker *w, int client_fd)
 {
     q_push(w->client_fd_queue, client_fd);

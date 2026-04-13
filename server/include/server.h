@@ -42,6 +42,17 @@
 #define likely(x)   __builtin_expect(!!(x), TRUE)
 #define unlikely(x) __builtin_expect(!!(x), FALSE)
 
+typedef struct Worker_s Worker;
+
+// ===============================
+// Global variables
+// ===============================
+
+// Workers array and count
+extern Worker *workers;
+extern _Atomic int workers_count;
+
+
 // ================================
 // Enums for error handling
 // ================================
@@ -128,7 +139,7 @@ typedef struct Message_s {
 
 // Worker struct representing a worker thread
 // Each worker has its own epoll instance and client list
-typedef struct Worker_s {
+struct Worker_s {
     pthread_t        thread;
 
     int             *client_fd_queue;
@@ -137,8 +148,12 @@ typedef struct Worker_s {
     int              epoll_fd;
     int 			 event_fd;  // For main notifications
 
-    Message        **msg_queue;
-} Worker;
+    // Okay, this is complex...
+    // Its an array of queues of messages.
+	// Each pair of worker threads has its own queue for sending messages to each other.
+	// like N*N queues for N workers. Each queue is SPSC
+    Message       **msg_queue;
+};
 
 
 // ================================

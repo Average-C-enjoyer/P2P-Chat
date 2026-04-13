@@ -60,7 +60,8 @@ CLIENT_STATE Connect(struct addrinfo *result, ClientTLS *client) {
         client->socket = -1;
     }
 
-    if (client->socket < 0) {
+    if (client->socket < 0) 
+    {
         fprintf(stderr, "Unable to connect!\n");
         return ERR_CONNECT;
     }
@@ -109,10 +110,14 @@ static TLS_STATE send_packet(ClientTLS *c, const unsigned char *data, uint32_t l
     uint32_t net_len = htonl(len);
 
     if (SSL_write(c->ssl, &net_len, sizeof(net_len)) <= 0)
+    {
         return SEND_FAIL;
+    }
 
     if (SSL_write(c->ssl, data, len) <= 0)
+    {
         return SEND_FAIL;
+    }
 
     return TLS_OK;
 }
@@ -132,7 +137,9 @@ static TLS_STATE handle_recv(ClientTLS *c)
     );
 
     if (r <= 0)
+    {
         return RECV_FAIL;
+    }
 
     c->in_len += r;
 
@@ -148,7 +155,9 @@ static TLS_STATE handle_recv(ClientTLS *c)
         }
 
         if (c->in_len < 4 + msg_len)
+        {
             break;
+        }
 
         unsigned char *payload = c->in_buffer + 4;
 
@@ -178,20 +187,27 @@ ClientSendMessage(clientPtr)
     while (1)
     {
         if (!fgets(buffer, sizeof(buffer), stdin))
+        {
             break;
+        }
 
         size_t len = strlen(buffer);
 
         if (len && buffer[len - 1] == '\n')
+        {
             buffer[--len] = '\0';
+        }
 
         if (strcmp(buffer, "exit") == 0)
+        {
             break;
+        }
 
         if (len == 0) continue;
 
         short err = send_packet(client, (unsigned char *)buffer, (uint32_t)len);
-        if (err < 0) {
+        if (err < 0) 
+        {
             tls_print_error(err);
             break;
         }
