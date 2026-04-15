@@ -116,6 +116,7 @@ function(add_echat_test name)
     target_include_directories(${name}
         PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}/include
+            ${CMAKE_CURRENT_SOURCE_DIR}/utils   
     )
 
     target_link_libraries(${name}
@@ -134,6 +135,10 @@ if(ENABLE_TESTS)
 
     add_echat_test(test_menu
         tests/test_menu.c
+    )
+
+    add_echat_test(test_queue
+        tests/test_queue.c
     )
 
 endif()

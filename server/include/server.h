@@ -20,7 +20,7 @@
 #define MAX_EVENTS 8192
 
 // Macro for error logging with strerror
-#define ERROR(msg) fprintf(stderr, "%s: %s\n", msg, strerror(errno))
+#define ERROR(msg, ...) fprintf(stderr, msg ": %s\n", ##__VA_ARGS__, strerror(errno))
 
 // Macro for debug logging, can be enabled by defining DEBUG
 #ifdef DEBUG_IMPL
@@ -42,7 +42,11 @@
 #define likely(x)   __builtin_expect(!!(x), TRUE)
 #define unlikely(x) __builtin_expect(!!(x), FALSE)
 
+// Forward declarations
+typedef struct ClientFlags_s ClientFlags;
 typedef struct Worker_s Worker;
+typedef struct ClientTLS_s ClientTLS;
+typedef struct Message_s Message;
 
 // ===============================
 // Global variables
@@ -50,7 +54,30 @@ typedef struct Worker_s Worker;
 
 // Workers array and count
 extern Worker *workers;
-extern _Atomic int workers_count;
+extern _Atomic(int) workers_count;
+
+/*
+Okay, this is complex...
+Its a 2d array of queues of pointers to Message struct.
+Each pair of worker threads has its own queue for sending messages to each other.
+like N*N queues for N workers. Each queue is SPSC
+
+Indexing like: 
+msg_queues[i][j]
+
+Where 
+i = sender (producer)
+j = receiver (consumer)
+
+In memory:
+     to →  0     1     2     3
+from ↓  +-----+-----+-----+-----+
+     0  |  -  | Q01 | Q02 | Q03 |
+     1  | Q10 |  -  | Q12 | Q13 |
+     2  | Q20 | Q21 |  -  | Q23 |
+     3  | Q30 | Q31 | Q32 |  -  |
+*/
+extern Message ****msg_queues;
 
 
 // ================================
@@ -58,14 +85,14 @@ extern _Atomic int workers_count;
 // ================================
 
 // Client state: whether it's still handshaking or fully connected
-typedef enum {
+typedef enum CLIENT_STATE_E{
     HANDSHAKING,
     CONNECTED
 } CLIENT_STATE;
 
 // Server status codes for various operations, 
 // including TLS errors, client handling, and epoll control
-typedef enum SERVER_STATUS_S {
+typedef enum SERVER_STATUS_E {
     OK                    =  0,
     TLS_BAD_CONTEXT       = -1,
     TLS_BAD_CERT          = -2,
@@ -81,7 +108,7 @@ typedef enum SERVER_STATUS_S {
 
 // Initialization status codes for server setup, 
 // including socket creation and binding errors
-typedef enum INIT_STATUS_S {
+typedef enum INIT_STATUS_E {
     GETADDRINFO_FAIL      = -1,
     SOCKET_CREATE_FAIL    = -2,
     SETSOCKOPT_FAIL       = -3,
@@ -90,7 +117,7 @@ typedef enum INIT_STATUS_S {
 } INIT_STATUS;
 
 // Main server status codes for overall server startup
-typedef enum SERVER_MAIN_STATUS_S {
+typedef enum SERVER_MAIN_STATUS_E {
     INIT_SERVER_FAIL      = -1,
     INIT_TLS_FAIL         = -2
 } SERVER_MAIN_STATUS;
@@ -103,13 +130,13 @@ typedef enum SERVER_MAIN_STATUS_S {
 // Flags for client state
 // Field "closing" needs for not closing connection instantly on error
 // but marking it for closing and removing after processing all events
-typedef struct ClientFlags_s {
+struct ClientFlags_s {
     _Bool        state;       // HANDSHAKING or CONNECTED
     _Bool        closing;
-} ClientFlags;
+};
 
 // Struct representing a connected client, including SSL state, buffers, and flags
-typedef struct ClientTLS_s {
+struct ClientTLS_s {
     SSL         *ssl;
 
 	uint8_t     *in_buffer;
@@ -123,19 +150,19 @@ typedef struct ClientTLS_s {
     int          socket;
     uint32_t     id;          // Unique client ID
     ClientFlags  flags;
-} ClientTLS;
+};
 
 // Define a dynamic array type for ClientTLS pointers
 define_ptr_array(ClientTLS);
 
 // Message struct for inter-worker communication 
 // with reference counting
-typedef struct Message_s {
+struct Message_s {
     uint8_t     *data;
     _Atomic int  refcount;
     uint32_t     len;
     uint32_t     sender_id;   // For not echoing msg to sender
-} Message;
+};
 
 // Worker struct representing a worker thread
 // Each worker has its own epoll instance and client list
@@ -147,14 +174,8 @@ struct Worker_s {
 
     int              epoll_fd;
     int 			 event_fd;  // For main notifications
-
-    // Okay, this is complex...
-    // Its an array of queues of messages.
-	// Each pair of worker threads has its own queue for sending messages to each other.
-	// like N*N queues for N workers. Each queue is SPSC
-    Message       **msg_queue;
+    int              id;
 };
-
 
 // ================================
 // Function declarations
@@ -194,7 +215,8 @@ void broadcast_message(
 SERVER_STATUS handle_recv(
     Array_ClientTLS *clients,
     ClientTLS       *c,
-    int              epoll_fd
+    int              epoll_fd,
+    int              current_worker_id
 );
 
 // Flushes the send buffer for a client, handling partial writes and SSL errors

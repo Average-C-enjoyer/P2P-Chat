@@ -11,6 +11,8 @@
 #include "server.h"
 #include "workers.h"
 
+Message ****msg_queues = NULL;
+
 SSL_CTX *server_ctx;
 
 // Definition of extern symbols declared in workers.h
@@ -179,7 +181,7 @@ SERVER_STATUS add_client(Worker *w, int sock)
         goto cleanup;
     }
 
-    printf("Added client");
+    printf("Added client\n");
     return OK;
 
 cleanup:
@@ -387,9 +389,9 @@ typedef enum PARSE_STATUS_S {
 
 // Extracting message from client's tcp buffer
 static inline PARSE_STATUS extract_message(
-    uint8_t *in_buffer, 
-    size_t  *in_len, 
-    Message *msg)
+    uint8_t  *in_buffer, 
+    size_t   *in_len, 
+    Message **msg)
 {
     // Need at least 4 bytes for length
     if (*in_len < LEN_PREFIX_SIZE)
@@ -414,22 +416,21 @@ static inline PARSE_STATUS extract_message(
         return MSG_BAD_LENGTH;
     }
 
-    Message *msg = malloc(sizeof(Message) + msg_len);
-    if (unlikely(!msg->data))
+    *msg = malloc(sizeof(Message) + msg_len);
+    if (unlikely(!*msg))
     {
         ERROR("Message allocation failed");
         return MSG_BUFFER_ALLOC_FAILED;
     }
 
 	// Data is stored right after the Message struct for cache efficiency and less malloc()
-    msg->data = (uint8_t *)(msg + 1);
+    (*msg)->data = (uint8_t *)(*msg + 1);
 
 	// Copy data from buffer
-    memcpy(msg->data, in_buffer + LEN_PREFIX_SIZE, msg_len);
-    msg->len = msg_len;
-
+    memcpy((*msg)->data, in_buffer + LEN_PREFIX_SIZE, msg_len);
+    (*msg)->len = msg_len;
     // Delete handled msg from buffer
-    size_t total = LEN_PREFIX_SIZE + msg_len;
+    size_t total     = LEN_PREFIX_SIZE + msg_len;
     size_t remaining = *in_len - total;
 
     if (remaining > 0)
@@ -450,7 +451,8 @@ static inline PARSE_STATUS extract_message(
 SERVER_STATUS handle_recv(
     Array_ClientTLS *clients,
     ClientTLS       *c,
-    int              epoll_fd)
+    int              epoll_fd,
+    int              current_worker_id)
 {
     _Bool need_epoll_out = FALSE;
 
@@ -514,7 +516,7 @@ SERVER_STATUS handle_recv(
 		}
     }
     
-    Message *msg;
+    Message *msg = NULL;
 
     int processed = 0;
     while (1)
@@ -524,22 +526,18 @@ SERVER_STATUS handle_recv(
             break;
         }
 
-        if (extract_message(c->in_buffer, &c->in_len, msg) != OK)
+        if (extract_message(c->in_buffer, &c->in_len, &msg) != OK)
         {
-            free(msg);
+            if (msg) free(msg);
             break;
         }
 
         msg->sender_id = c->id;
         msg->refcount = workers_count;
 
-        for (int wi = 0; wi < workers_count; wi++)
-        {
-            send_msg_to_worker(&workers[wi], msg);
-        }
+        send_msg_to_workers(msg, current_worker_id);
     }
 
-	DEBUG("Received message\n");
 	return OK;
 }
 
@@ -574,6 +572,7 @@ short server_run()
     {
         init_worker(&workers[i]);
 
+        workers[i].id = i;
         workers[i].epoll_fd = epoll_create1(0);
         workers[i].event_fd = eventfd(0, EFD_NONBLOCK);
 
@@ -596,11 +595,34 @@ short server_run()
         {
             ERROR("epoll_ctl ADD event_fd failed");
         }
+    }
 
+    atomic_store(&workers_count, logical_cores_amount - workers_failed);
+    
+    // Start running them
+    for (int i = 0; i < workers_count; i++)
+    {
         run_worker_thread(&workers[i]);
     }
 
-    workers_count = logical_cores_amount - workers_failed;
+    // Initialize queues for workers
+    msg_queues = malloc(sizeof(Message **) * workers_count);
+
+    for (int i = 0; i < workers_count; i++)
+    {
+        msg_queues[i] = malloc(sizeof(Message *) * workers_count);
+
+        for (int j = 0; j < workers_count; j++)
+        {
+            if (i == j) {
+                msg_queues[i][j] = NULL;
+                continue;
+            }
+
+            msg_queues[i][j] = NULL;
+            q_init(msg_queues[i][j], 1024);
+        }
+    }
 
     // Initialize epoll instance for accept thread (main)
     int epoll_fd = epoll_create1(0);

@@ -200,7 +200,7 @@ ClientSendMessage(clientPtr)
 
         if (strcmp(buffer, "exit") == 0)
         {
-            break;
+			exit(0);
         }
 
         if (len == 0) continue;
