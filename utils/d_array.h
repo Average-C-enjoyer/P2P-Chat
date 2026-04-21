@@ -176,10 +176,10 @@ typedef struct {              \
 
 static inline void da_print_error(DARRAY_STATUS err) {
 	switch (err) {
-		case DA_OK: printf("OK\n"); break;
-		case DA_ERR_NOMEM: printf("Out of memory\n"); break;
-		case DA_ERR_BAD_INDEX: printf("Bad index\n"); break;
-		default: printf("Unknown error\n");
+	case DA_OK: printf("OK\n"); break;
+	case DA_ERR_NOMEM: printf("Out of memory\n"); break;
+	case DA_ERR_BAD_INDEX: printf("Bad index\n"); break;
+	default: printf("Unknown error\n");
 	}
 }
 

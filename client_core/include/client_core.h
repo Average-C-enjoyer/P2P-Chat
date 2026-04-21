@@ -1,75 +1,58 @@
 #pragma once
 
-#include <stdio.h>
-
-#include "cross_platform_api.h"
-#include "TLS.h"
-
-#define DEFAULT_PORT "4433"
-
-#define MAX_MESSAGE_SIZE 4096
-
-#define THREAD_COUNT 2
-#define SEND_THREAD 0
-#define RECV_THREAD 1
+#include <stdint.h>
 
 #define IP_LENGTH 15
+#define MAX_NAME_LENGTH 17
 
-typedef enum {
-	OK = 0,
-	ERR_INIT_CREATE_CTX = -1,
-	ERR_INIT_GAI = -2,
-	ERR_CONNECT = -3
-} CLIENT_STATE;
+#define TRUE  1
+#define FALSE 0
 
+// Dll stuff
+#if defined(_WIN32) || defined(__CYGWIN__)
+	#ifdef ECHAT_DLL_EXPORTS
+		#define ECHAT_API __declspec(dllexport)
+	#else
+		#define ECHAT_API __declspec(dllimport)
+	#endif
+#else
+	#ifdef ECHAT_DLL_EXPORTS
+		#define ECHAT_API __attribute__((visibility("default")))
+	#else
+		#define ECHAT_API
+	#endif
+#endif
 
-// Client structure for TLS connections
-typedef struct {
-	uint8_t   in_buffer[INPUT_BUFFER_SIZE];
-	uint8_t   name[16];
+/* -------Callback typedefs-------*/
+typedef void(*on_connect_callback)(_Bool connected);
+typedef void(*on_message_callback)(const uint8_t *msg, uint32_t len);
+typedef void(*on_error_callback)(uint32_t error_code, const uint8_t *error_message);
 
-	SSL *ssl;
-	SSL_CTX *ctx;
+// Handle for client
+typedef void *client_handle_t;
 
-	size_t    in_len;
+/* -------Api funcs-------*/
 
-	SOCKET_T  socket;
-} ClientTLS;
+ECHAT_API client_handle_t client_create();
+ECHAT_API void client_destroy(client_handle_t handle);
 
+// Connects client handle to server
+ECHAT_API void client_connect(client_handle_t handle, uint8_t *ip);
+// Disconnects client from server
+ECHAT_API void client_disconnect(client_handle_t handle);
+// Sends payload
+ECHAT_API void client_send(client_handle_t handle, uint8_t *payload);
 
-static inline void client_print_error(CLIENT_STATE err) {
-	switch (err) {
-	case ERR_INIT_CREATE_CTX:
-		fprintf(stderr, "Failed to create TLS context\n");
-		break;
-	case ERR_INIT_GAI:
-		fprintf(stderr, "Failed to resolve server address\n");
-		break;
-	case ERR_CONNECT:
-		fprintf(stderr, "Failed to connect to server\n");
-		break;
-	default:
-		fprintf(stderr, "Unknown error\n");
-	}
-}
+/* -------Callback setters-------*/
 
-/* Initialize TLS context, prepare hints and resolve server address */
-CLIENT_STATE init_TLS_and_sock(ClientTLS *client, 
-											 struct addrinfo *hints, 
-											 struct addrinfo **result, 
-											 char *ip);
+// Sets the on_connect collback to client struct (called after connection)
+ECHAT_API void client_set_on_connect_callback(client_handle_t handle, on_connect_callback cb);
+// Sets the on_message collback to client struct (called after message recieved)
+ECHAT_API void client_set_on_message_callback(client_handle_t handle, on_message_callback cb);
+// Sets the on_error collback to client struct (called after an error occured)
+ECHAT_API void client_set_on_error_callback(client_handle_t handle, on_error_callback cb);
 
-/* Connect to the resolved address(es) */
-CLIENT_STATE Connect(struct addrinfo *result, ClientTLS *client);
+/* ------- Client fields setters------- */
 
-/* Perform TLS handshake */
-TLS_STATE TLS_handshake(ClientTLS *client);
-
-// Length-Prefixed Protocol
-static TLS_STATE send_packet(ClientTLS *c, const unsigned char *data, uint32_t len);
-static void process_message(unsigned char *payload, uint32_t len);
-static TLS_STATE handle_recv(ClientTLS *c);
-
-// Send and recv threads (macro expands to proper signature)
-ClientSendMessage(clientPtr);
-ClientRecieveMessage(lpParam);
+// Sets name to client struct
+ECHAT_API void client_set_name(client_handle_t handle, uint8_t *name);

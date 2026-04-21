@@ -1,65 +1,170 @@
-﻿#include "menu.h"
-#include "terminal.h"
+﻿#include "terminal.h"
+#include "menu.h"
 
 #include <stdlib.h>
 
-// Start menu assets
-const char hint[] = "\n\n\n\n\tUse \x1B[32mUP\x1B[0m and \x1B[32mDOWN\x1B[0m arrows to navigate, \x1B[32mENTER\x1B[0m to select\n\n";
+#define BIG_LOGO_WIDTH 40
+#define SMALL_LOGO_WIDTH 19
 
-const char *logo =
-u8"\n\n"
-u8"\t\t\x1B[32m████████  ███████ ██                ██   \033[0m\n"
-u8"\t\t\x1B[32m██▓      ▓██      ██        ████    ██   \033[0m\n"
-u8"\t\t\x1B[32m█▓▓▓░▓   ▓█▓      █▓▓▓██   █▓  ██ ███▓▓█▓\033[0m\n"
-u8"\t\t\x1B[32m▓▓░      ░▓▓      █▓   ▓▓  █▓▓█▓▓   ▓▓░  \033[0m\n"
-u8"\t\t\x1B[32m░░▓░░▓░░  ░▓░░▓░░ ▓░   ░░  ▓░  ░░    ▓░░ \033[0m\n";
+// Array of lines so i can print and center it
+const char *logo_lines[] = {
+GREEN
+"████████  ███████ ██                ██",
+"██▓      ▓██      ██        ████    ██",
+"█▓▓▓░▓   ▓█▓      █▓▓▓██   █▓  ██ ███▓▓█▓",
+"▓▓░      ░▓▓      █▓   ▓▓  █▓▓█▓▓   ▓▓░",
+"░░▓░░▓░░  ░▓░░▓░░ ▓░   ░░  ▓░  ░░    ▓░░"
+};
 
-const char *btn_reg =
-"\t.--------------------.\n"
-"\t| SIGN IN OR SIGN UP |\n"
-"\t'--------------------'\n";
 
-const char *btn_reg_choosed =
-"\t\x1B[32m.--------------------.\033[0m\n"
-"\t\x1B[32m| SIGN IN OR SIGN UP |\033[0m\n"
-"\t\x1B[32m'--------------------'\033[0m\n";
+const char *small_logo_lines[] = {
+GREEN
+"██▀ ▄▀▀ █▄█ ▄▀▄ ▀█▀",
+"█▄▄ ▀▄▄ █ █ █▀█  █ "
+RESET_COLOR
+};
 
-const char *btn_guest =
-"\t.--------------------.\n"
-"\t| CONTINUE AS GUEST  |\n"
-"\t'--------------------'\n";
+const char *btn_reg_lines[] = {
+"╔────────────────────╗",
+"│ SIGN IN OR SIGN UP │",
+"╚────────────────────╝"
+};
 
-const char *btn_guest_choosed =
-"\t\x1B[32m.--------------------.\033[0m\n"
-"\t\x1B[32m| CONTINUE AS GUEST  |\033[0m\n"
-"\t\x1B[32m'--------------------'\033[0m\n";
+const char *btn_reg_lines_choosed[] = {
+GREEN
+"╔────────────────────╗",
+"│ SIGN IN OR SIGN UP │",
+"╚────────────────────╝"
+RESET_COLOR
+};
+
+const char *btn_guest_lines[] = {
+"╔────────────────────╗",
+"│ CONTINUE AS GUEST  │",
+"╚────────────────────╝"
+};
+
+const char *btn_guest_lines_choosed[] = {
+GREEN
+"╔────────────────────╗",
+"│ CONTINUE AS GUEST  │",
+"╚────────────────────╝"
+RESET_COLOR
+};
+
+// Main window assets
+
+const char *group_chat_header =
+GREEN
+"██▀ ▄▀▀ █▄█ ▄▀▄ ▀█▀╒══════════════════════════════════════════════════════════════════════════════════════════════╗\n"
+"█▄▄ ▀▄▄ █ █ █▀█  █ │                                                                                              ║\n"
+"╓──────────────────┴──────────────────────────────────────────────────────────────────────────────────────────────║\n"
+RESET_COLOR;
+
+const char *p2p_chat_header =
+GREEN
+"██▀ ▄▀▀ █▄█ ▄▀▄ ▀█▀╒══════════════════════════════════════════════════════════════════════════════════════════════╗\n"
+"█▄▄ ▀▄▄ █ █ █▀█  █ │                                                                                              ║\n"
+"╓──────────────────┼──────────────────────────────────────────────────────────────────────────────────────────────║\n"
+RESET_COLOR;
 
 
 // API
 void init_menu(StartMenu *menu) {
-    menu->hint = hint;
-    menu->btn_reg = btn_reg_choosed;
-    menu->btn_guest = btn_guest;
+    menu->btn_reg = btn_reg_lines_choosed;
+    menu->btn_guest = btn_guest_lines;
     menu->type = BUTTON_REG;
 }
 
+void draw_frame(int w, int h) {
+    // Top border
+    printf(GREEN"╔");
+    for (int i = 0; i < w - 2; i++) printf("═");
+    printf("╗");
+
+    // Middle
+    for (int y = 1; y < h - 1; y++) {
+        printf("\n║");
+        for (int i = 0; i < w - 2; i++) printf(" ");
+        printf("║");
+    }
+
+    // Bottom
+    printf("\n╚");
+    for (int i = 0; i < w - 2; i++) printf("═");
+    printf("╝"RESET_COLOR);
+}
+
 void display_menu(StartMenu *menu) {
-    printf("%s", logo);
-    printf("%s", menu->hint);
-    printf("%s", menu->btn_reg);
-    printf("%s", menu->btn_guest);
+    TermSize ts = terminal_get_size();
+
+    terminal_clear_home();
+
+    draw_frame(ts.width, ts.height);
+
+    int y = 3;
+
+    // --- choose logo ---
+    int use_tiny = ts.width < BIG_LOGO_WIDTH;
+
+    const char **logo;
+    int logo_h;
+    int logo_w;
+
+    if (use_tiny) {
+        logo = small_logo_lines;
+        logo_h = 2;
+        logo_w = 22;
+    }
+    else {
+        logo = logo_lines;
+        logo_h = 5;
+        logo_w = 48;
+    }
+
+    // --- print logo ---
+    int start_x = center_x(ts.width, logo_w);
+
+    for (int i = 0; i < logo_h; i++) {
+        print_at(start_x, y + i, logo[i]);
+    }
+
+    y += logo_h + 3;
+
+    // --- hint ---
+    const char *hint_line =
+        "Use " GREEN "UP" RESET_COLOR "/" GREEN "DOWN" RESET_COLOR " to navigate, " GREEN "ENTER" RESET_COLOR " to select";
+
+    print_at(center_x(ts.width, 40), y, hint_line);
+
+    y += 2;
+
+    // --- buttons ---
+    int btn_x = center_x(ts.width, 28);
+
+    if (btn_x < 2) btn_x = 2;
+    if (btn_x > ts.width - 28) btn_x = ts.width - 28;
+
+    for (int i = 0; i < 3; i++) {
+        print_at(btn_x, y + i, menu->btn_reg[i]);
+    }
+    y += 3;
+
+    for (int i = 0; i < 3; i++) {
+        print_at(btn_x, y + i, menu->btn_guest[i]);
+    }
 }
 
 void switch_button(StartMenu *menu) {
     if (menu->type == BUTTON_REG) {
         menu->type = BUTTON_GUEST;
-        menu->btn_guest = btn_guest_choosed;
-        menu->btn_reg = btn_reg;
+        menu->btn_guest = btn_guest_lines_choosed;
+        menu->btn_reg = btn_reg_lines;
     }
     else if (menu->type == BUTTON_GUEST) {
         menu->type = BUTTON_REG;
-        menu->btn_reg = btn_reg_choosed;
-        menu->btn_guest = btn_guest;
+        menu->btn_reg = btn_reg_lines_choosed;
+        menu->btn_guest = btn_guest_lines;
     }
 }
 
@@ -125,8 +230,15 @@ static void enable_raw_mode(void) {
     atexit(restore_terminal);
 }
 
-static void disable_raw_mode(struct termios *orig) {
-    tcsetattr(STDIN_FILENO, TCSAFLUSH, orig);
+void restore_stdin_mode(void)
+{
+    struct termios t;
+
+    tcgetattr(STDIN_FILENO, &t);
+
+    t.c_lflag |= (ICANON | ECHO);  // вернуть нормальный режим
+
+    tcsetattr(STDIN_FILENO, TCSAFLUSH, &t);
 }
 
 void handle_menu_selection(StartMenu *menu) {
@@ -160,7 +272,7 @@ void handle_menu_selection(StartMenu *menu) {
         }
     }
 
-    disable_raw_mode(&global_orig);
+    restore_stdin_mode();
 }
 
 #endif // _WIN32

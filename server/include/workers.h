@@ -22,7 +22,7 @@ static inline void send_msg_to_workers(Message *msg, int current_worker_id)
     {
         q_push(msg_queues[current_worker_id][wi], msg);
 
-		//DEBUG("Sent message to worker %d from worker %d\n", 
+        //DEBUG("Sent message to worker %d from worker %d\n", 
         //    workers[wi].id, current_worker_id);
 
         uint64_t one = 1;
@@ -57,7 +57,7 @@ void *run_worker(void *arg)
                         ERROR("Failed to add client");
                     }
 
-					DEBUG("Worker id: %d\n", current_worker->id);
+                    DEBUG("Worker id: %d\n", current_worker->id);
                 }
 
                 for (int i = 0; i < workers_count; i++)
@@ -111,7 +111,7 @@ void *run_worker(void *arg)
                 );
                 if (err < 0)
                 {
-					mark_client_for_close(c);
+                    mark_client_for_close(c);
                 }
             }
 

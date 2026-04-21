@@ -1,12 +1,12 @@
 #pragma once
 
-#include "darray.h"
+#include "d_array.h"
 
 #include <openssl/ssl.h>
 #include <errno.h>
 
 #if __STDC_VERSION__ < 201112L || __STDC_NO_ATOMICS__ == 1
-    #error "Atomics not supported. Cannot compile"
+#error "Atomics not supported. Cannot compile"
 #endif
 
 #define TRUE 1
@@ -19,18 +19,24 @@
 
 #define MAX_EVENTS 8192
 
-// Macro for error logging with strerror
-#define ERROR(msg, ...) fprintf(stderr, msg ": %s\n", ##__VA_ARGS__, strerror(errno))
+#define ERROR(...) error_impl(__VA_ARGS__, strerror(errno))
+
+static inline void error_impl(const char *fmt, ...)
+{
+    va_list args;
+    va_start(args, fmt);
+    fprintf(stderr, "ERROR: ");
+    vfprintf(stderr, fmt, args);
+    va_end(args);
+
+    fprintf(stderr, ": %s\n", strerror(errno));
+}
 
 // Macro for debug logging, can be enabled by defining DEBUG
 #ifdef DEBUG_IMPL
-    #define DEBUG(...)           \
-        do {                     \
-            printf(__VA_ARGS__); \
-            printf("\n");        \
-        } while (0)
+#define DEBUG(fmt, ...) do { fprintf(stderr, "DEBUG: " fmt "\n", ##__VA_ARGS__); } while(0)
 #else
-    #define DEBUG(...)
+#define DEBUG(fmt, ...) do { } while(0)
 #endif
 
 // Macro to set a file descriptor to non-blocking mode
@@ -54,7 +60,7 @@ typedef struct Message_s Message;
 
 // Workers array and count
 extern Worker *workers;
-extern _Atomic(int) workers_count;
+extern _Atomic(int)workers_count;
 
 /*
 Okay, this is complex...
@@ -62,10 +68,10 @@ Its a 2d array of queues of pointers to Message struct.
 Each pair of worker threads has its own queue for sending messages to each other.
 like N*N queues for N workers. Each queue is SPSC
 
-Indexing like: 
+Indexing like:
 msg_queues[i][j]
 
-Where 
+Where
 i = sender (producer)
 j = receiver (consumer)
 
@@ -85,7 +91,7 @@ extern Message ****msg_queues;
 // ================================
 
 // Client state: whether it's still handshaking or fully connected
-typedef enum CLIENT_STATE_E{
+typedef enum CLIENT_STATE_E {
     HANDSHAKING,
     CONNECTED
 } CLIENT_STATE;
@@ -93,33 +99,33 @@ typedef enum CLIENT_STATE_E{
 // Server status codes for various operations, 
 // including TLS errors, client handling, and epoll control
 typedef enum SERVER_STATUS_E {
-    OK                    =  0,
-    TLS_BAD_CONTEXT       = -1,
-    TLS_BAD_CERT          = -2,
-    TLS_BAD_KEY           = -3,
-    CLIENT_INIT_FAIL      = -4,
+    OK = 0,
+    TLS_BAD_CONTEXT = -1,
+    TLS_BAD_CERT = -2,
+    TLS_BAD_KEY = -3,
+    CLIENT_INIT_FAIL = -4,
     CLIENT_HANDSHAKE_FAIL = -5,
-    SEND_FAIL             = -6,
-    RECV_FAIL             = -7,
-    BUFFER_OVERFLOW       = -8,
-    REMOVE_CLIENT_FAIL    = -9,
-    EPOLL_CTL_FAIL        = -10
+    SEND_FAIL = -6,
+    RECV_FAIL = -7,
+    BUFFER_OVERFLOW = -8,
+    REMOVE_CLIENT_FAIL = -9,
+    EPOLL_CTL_FAIL = -10
 } SERVER_STATUS;
 
 // Initialization status codes for server setup, 
 // including socket creation and binding errors
 typedef enum INIT_STATUS_E {
-    GETADDRINFO_FAIL      = -1,
-    SOCKET_CREATE_FAIL    = -2,
-    SETSOCKOPT_FAIL       = -3,
-    BIND_FAIL             = -4,
-    LISTEN_FAIL           = -5
+    GETADDRINFO_FAIL = -1,
+    SOCKET_CREATE_FAIL = -2,
+    SETSOCKOPT_FAIL = -3,
+    BIND_FAIL = -4,
+    LISTEN_FAIL = -5
 } INIT_STATUS;
 
 // Main server status codes for overall server startup
 typedef enum SERVER_MAIN_STATUS_E {
-    INIT_SERVER_FAIL      = -1,
-    INIT_TLS_FAIL         = -2
+    INIT_SERVER_FAIL = -1,
+    INIT_TLS_FAIL = -2
 } SERVER_MAIN_STATUS;
 
 
@@ -137,12 +143,12 @@ struct ClientFlags_s {
 
 // Struct representing a connected client, including SSL state, buffers, and flags
 struct ClientTLS_s {
-    SSL         *ssl;
+    SSL *ssl;
 
-	uint8_t     *in_buffer;
-	size_t       in_len;
+    uint8_t *in_buffer;
+    size_t       in_len;
 
-    uint8_t     *out_buffer;
+    uint8_t *out_buffer;
     size_t       out_len;
     size_t       out_sent;    // Bytes already sent from out_buffer
 
@@ -158,7 +164,7 @@ define_ptr_array(ClientTLS);
 // Message struct for inter-worker communication 
 // with reference counting
 struct Message_s {
-    uint8_t     *data;
+    uint8_t *data;
     _Atomic int  refcount;
     uint32_t     len;
     uint32_t     sender_id;   // For not echoing msg to sender
@@ -169,7 +175,7 @@ struct Message_s {
 struct Worker_s {
     pthread_t        thread;
 
-    int             *client_fd_queue;
+    int *client_fd_queue;
     Array_ClientTLS  clients;
 
     int              epoll_fd;
@@ -194,7 +200,7 @@ SERVER_STATUS add_client(Worker *w, int sock);
 // Returns OK on success, REMOVE_CLIENT_FAIL on failure
 SERVER_STATUS remove_client(
     Array_ClientTLS *clients,
-    ClientTLS       *c,
+    ClientTLS *c,
     int              epoll_fd
 );
 
@@ -205,8 +211,8 @@ SERVER_STATUS handle_handshake(int epoll_fd, ClientTLS *c);
 
 // Func for broadcasting the message to all other clients
 void broadcast_message(
-    Array_ClientTLS *clients, 
-    Message *msg, 
+    Array_ClientTLS *clients,
+    Message *msg,
     int epoll_fd
 );
 
@@ -214,7 +220,7 @@ void broadcast_message(
 // processing complete messages and returns it
 SERVER_STATUS handle_recv(
     Array_ClientTLS *clients,
-    ClientTLS       *c,
+    ClientTLS *c,
     int              epoll_fd,
     int              current_worker_id
 );
@@ -244,4 +250,4 @@ static inline void run_worker_thread(Worker *worker)
 
 
 // Main fanc to start server
-short server_run();
+SERVER_MAIN_STATUS server_run();

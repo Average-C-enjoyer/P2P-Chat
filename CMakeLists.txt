@@ -15,6 +15,20 @@ find_package(PkgConfig REQUIRED)
 pkg_check_modules(JEMALLOC REQUIRED jemalloc)
 
 # ===============================
+# libsodium
+# ===============================
+
+set(SODIUM_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/libsodium/libsodium-stable)
+
+set(SODIUM_INCLUDE_DIR
+    ${SODIUM_ROOT}/src/libsodium/include
+)
+
+set(SODIUM_LIBRARY
+    ${SODIUM_ROOT}/src/libsodium/.libs/libsodium.a
+)
+
+# ===============================
 # Libraries
 # ===============================
 
@@ -43,12 +57,14 @@ target_include_directories(ClientCore
     PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/client_core/include
         ${CMAKE_CURRENT_SOURCE_DIR}/utils
+        ${SODIUM_INCLUDE_DIR}
 )
 
 target_link_libraries(ClientCore
     PRIVATE
         OpenSSL::SSL
         OpenSSL::Crypto
+        #${SODIUM_LIBRARY}
 )
 
 # ===============================
@@ -58,8 +74,8 @@ target_link_libraries(ClientCore
 if(UNIX AND NOT WIN32)
 
     add_executable(server
-        server/server.c
-        server/src/server_core.c
+        "server/server.c"
+        "server/src/server_core.c"
     )
 
     target_include_directories(server

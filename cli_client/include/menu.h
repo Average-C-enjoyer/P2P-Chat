@@ -36,9 +36,8 @@ typedef enum {
 } ActiveButtonType;
 
 typedef struct {
-   const char *hint;
-   const char *btn_reg;
-   const char *btn_guest;
+   const char **btn_reg;
+   const char **btn_guest;
    ActiveButtonType type;
 } StartMenu;
 

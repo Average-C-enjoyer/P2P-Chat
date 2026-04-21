@@ -154,4 +154,3 @@ static inline size_t q_next_pow2(size_t x) {
         (q) = NULL;                    \
     }                                  \
 } while (0)
-

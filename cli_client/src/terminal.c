@@ -20,13 +20,24 @@ void terminal_init(void) {
 	SetConsoleCursorInfo(hOut, &ci);
 
 	SetConsoleOutputCP(CP_UTF8);
-		SetConsoleCP(CP_UTF8);
+	SetConsoleCP(CP_UTF8);
 }
 
 void terminal_restore(void) {
 	system("cls");
 	SetConsoleMode(hOut, originalMode);
 	SetConsoleCursorInfo(hOut, &originalCursor);
+}
+
+TermSize terminal_get_size(void) {
+	CONSOLE_SCREEN_BUFFER_INFO csbi;
+	GetConsoleScreenBufferInfo(GetStdHandle(STD_OUTPUT_HANDLE), &csbi);
+
+	TermSize size = {
+		csbi.srWindow.Right - csbi.srWindow.Left + 1,
+		csbi.srWindow.Bottom - csbi.srWindow.Top + 1
+	};
+	return size;
 }
 
 void terminal_clear_home(void) {
@@ -46,6 +57,10 @@ void terminal_show_cursor(void) {
 
 #else // Linux / POSIX
 
+#include <stdio.h>
+#include <sys/ioctl.h>
+#include <unistd.h>
+
 void terminal_init(void) {
 	printf("\033[?25l"); // hide cursor
 	system("clear");
@@ -58,8 +73,17 @@ void terminal_restore(void) {
 	fflush(stdout);
 }
 
+TermSize terminal_get_size(void) {
+	struct winsize ws;
+	ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws);
+
+	TermSize size = { ws.ws_col, ws.ws_row };
+	return size;
+}
+
 void terminal_clear_home(void) {
-	printf("\033[H"); // move cursor to 0, 0 position
+	system("clear");
+	printf("\033[H");  // move cursor home
 	fflush(stdout);
 }
 

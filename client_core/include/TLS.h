@@ -1,10 +1,7 @@
 #pragma once
 
-#include <stdio.h>
 #include <openssl/ssl.h>
-#include <openssl/err.h>
 #include <openssl/x509.h>
-#include <openssl/sha.h>
 
 static inline int init_openssl()
 {

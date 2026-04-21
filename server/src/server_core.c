@@ -247,7 +247,7 @@ SERVER_STATUS handle_handshake(int epoll_fd, ClientTLS *c)
             return EPOLL_CTL_FAIL;
         }
 
-		DEBUG("TLS handshake completed");
+        DEBUG("TLS handshake completed");
         return OK;
     }
 
@@ -255,7 +255,7 @@ SERVER_STATUS handle_handshake(int epoll_fd, ClientTLS *c)
 
     if (err == SSL_ERROR_WANT_READ)
     {
-		DEBUG("TLS handshake in progress, waiting for more data");
+        DEBUG("TLS handshake in progress, waiting for more data");
         return OK;
     }
 
@@ -274,7 +274,7 @@ SERVER_STATUS handle_handshake(int epoll_fd, ClientTLS *c)
             return EPOLL_CTL_FAIL;
         }
 
-		DEBUG("TLS handshake in progress, waiting for socket to be writable");
+        DEBUG("TLS handshake in progress, waiting for socket to be writable");
         return OK;
     }
 
@@ -324,9 +324,9 @@ SERVER_STATUS flush_send(ClientTLS *c, Worker *w)
 
 // Queues a packet to be sent to the client, adding length prefix and buffering
 static SERVER_STATUS queue_packet(
-    uint8_t  *out_buffer, 
-    size_t   *out_len, 
-    uint8_t  *payload, 
+    uint8_t *out_buffer,
+    size_t *out_len,
+    uint8_t *payload,
     uint32_t  len)
 {
     if (unlikely(len > INPUT_BUFFER_SIZE))
@@ -375,22 +375,22 @@ void broadcast_message(Array_ClientTLS *clients, Message *msg, int epoll_fd)
             ERROR("epoll_ctl MOD failed when broadcasting message");
             mark_client_for_close(dst);
             continue;
-		}
+        }
     }
 }
 
 
 typedef enum PARSE_STATUS_S {
-    MSG_BAD_SIZE            = -1,
-	MSG_TOO_LARGE           = -2,
-    MSG_BAD_LENGTH          = -3,
+    MSG_BAD_SIZE = -1,
+    MSG_TOO_LARGE = -2,
+    MSG_BAD_LENGTH = -3,
     MSG_BUFFER_ALLOC_FAILED = -4
 } PARSE_STATUS;
 
 // Extracting message from client's tcp buffer
 static inline PARSE_STATUS extract_message(
-    uint8_t  *in_buffer, 
-    size_t   *in_len, 
+    uint8_t *in_buffer,
+    size_t *in_len,
     Message **msg)
 {
     // Need at least 4 bytes for length
@@ -423,14 +423,14 @@ static inline PARSE_STATUS extract_message(
         return MSG_BUFFER_ALLOC_FAILED;
     }
 
-	// Data is stored right after the Message struct for cache efficiency and less malloc()
+    // Data is stored right after the Message struct for cache efficiency and less malloc()
     (*msg)->data = (uint8_t *)(*msg + 1);
 
-	// Copy data from buffer
+    // Copy data from buffer
     memcpy((*msg)->data, in_buffer + LEN_PREFIX_SIZE, msg_len);
     (*msg)->len = msg_len;
     // Delete handled msg from buffer
-    size_t total     = LEN_PREFIX_SIZE + msg_len;
+    size_t total = LEN_PREFIX_SIZE + msg_len;
     size_t remaining = *in_len - total;
 
     if (remaining > 0)
@@ -450,7 +450,7 @@ static inline PARSE_STATUS extract_message(
 
 SERVER_STATUS handle_recv(
     Array_ClientTLS *clients,
-    ClientTLS       *c,
+    ClientTLS *c,
     int              epoll_fd,
     int              current_worker_id)
 {
@@ -508,20 +508,20 @@ SERVER_STATUS handle_recv(
         struct epoll_event ev;
         ev.events = EPOLLIN | EPOLLOUT | EPOLLET;
         ev.data.ptr = c;
-        
+
         if (epoll_ctl(epoll_fd, EPOLL_CTL_MOD, c->socket, &ev) < 0)
         {
             ERROR("epoll_ctl MOD failed after WANT_WRITE in recv");
             return EPOLL_CTL_FAIL;
-		}
+        }
     }
-    
+
     Message *msg = NULL;
 
     int processed = 0;
     while (1)
     {
-		if (++processed > 1000) {
+        if (++processed > 1000) {
             DEBUG("Processed 1000 messages, yielding to avoid starvation");
             break;
         }
@@ -538,11 +538,11 @@ SERVER_STATUS handle_recv(
         send_msg_to_workers(msg, current_worker_id);
     }
 
-	return OK;
+    return OK;
 }
 
 
-short server_run()
+SERVER_MAIN_STATUS server_run()
 {
     // Define amount of logical cores for creating same amount
     // of worker threads
@@ -598,7 +598,7 @@ short server_run()
     }
 
     atomic_store(&workers_count, logical_cores_amount - workers_failed);
-    
+
     // Start running them
     for (int i = 0; i < workers_count; i++)
     {
