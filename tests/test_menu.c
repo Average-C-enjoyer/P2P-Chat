@@ -5,7 +5,7 @@ int main(void) {
 	StartMenu menu_button;
 
 	init_menu(&menu_button);
-	display_menu(&menu_button);
+	display_main_menu(&menu_button);
 	handle_menu_selection(&menu_button);
 
 #ifdef _WIN32

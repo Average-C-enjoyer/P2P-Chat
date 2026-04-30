@@ -69,11 +69,18 @@ int main(MAIN_ARGS) {
     // START MENU
     terminal_init();
 
-    StartMenu menu_button;
+    MenuButtons menu;
 
-    init_menu(&menu_button);
-    display_menu(&menu_button);
-    handle_menu_selection(&menu_button);
+    init_menu(&menu);
+    
+    while (1) {
+        if (menu.type == MAIN_MENU)
+            display_menu(&menu, 1, 1);
+        else if (menu.type == CHAT_SELECTION_MENU)
+            display_menu(&menu, 0, 0);
+        else
+            break;
+    }
 
     terminal_restore();
 

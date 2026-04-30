@@ -1,4 +1,4 @@
-#include "client_core.h"
+  #include "client_core.h"
 
 #include "cross_platform_api.h"
 #include "TLS.h"
@@ -43,13 +43,16 @@ typedef struct ClientTLS_s {
     SSL     *ssl;
     SSL_CTX *ctx;
 
-    // threading
+    // recieve thread, starts automaticly.
+    // I'm too lazy to implement a complite cross-platform 
+    // event loop only to read data, so i use multithreading
+    // (better than basic select in my opinion)
     thread_t recv_thread;
 
     // Client callbacks
-    void (*on_connect) (_Bool connected);
-    void (*on_message) (const uint8_t *message, uint32_t len);
-    void (*on_error)   (uint32_t error_code, const uint8_t *error_message);
+    void     (*on_connect) (_Bool connected);
+    void     (*on_message) (const uint8_t *message, uint32_t len);
+    void     (*on_error)   (uint32_t error_code, const uint8_t *error_message);
 
     socket_t socket;
     uint32_t in_len;
